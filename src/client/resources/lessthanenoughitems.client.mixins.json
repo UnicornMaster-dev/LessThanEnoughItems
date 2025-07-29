@@ -1,0 +1,13 @@
+{
+	"required": true,
+	"package": "net.jackson.mixin",
+	"compatibilityLevel": "JAVA_21",
+	"client": [
+		"InventoryScreenMixin",
+		"HandledScreenAccessor",
+		"HandledScreenMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}
