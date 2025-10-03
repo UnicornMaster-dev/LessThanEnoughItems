@@ -538,6 +538,8 @@ public class RecipeScreen extends Screen {
                 return Items.IRON_CHESTPLATE;
             case "#minecraft:netherite_tool_materials":
                 return Items.NETHERITE_INGOT;
+            case "#minecraft:crimson_stems":
+                return Items.CRIMSON_STEM;
             default:
                 // If unknown tag, try to extract the item name and use that
                 String cleanTag = tag.replace("#minecraft:", "");
