@@ -14,6 +14,9 @@ import net.minecraft.registry.Registries;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.MathHelper;
+import net.minecraft.screen.slot.SlotActionType;
+import net.minecraft.client.gui.screen.ingame.CraftingScreen;
+import net.minecraft.screen.CraftingScreenHandler;
 
 import java.io.InputStreamReader;
 import java.util.*;
@@ -27,6 +30,7 @@ public class RecipeScreen extends Screen {
     private TextFieldWidget searchField;
     private ButtonWidget craftableToggleButton;
     private ButtonWidget recipeTypeButton;
+    private ButtonWidget craftButton;
     private List<Item> allItems;
     private List<Item> filteredItems;
     private int scrollOffset = 0;
@@ -46,6 +50,11 @@ public class RecipeScreen extends Screen {
     private static final int ITEM_LIST_WIDTH = 160;
     private static final int RECIPE_AREA_WIDTH = 200;
     private static final int MARGIN = 10;
+
+    // Craft button and missing items highlighting
+    private Set<Item> missingItems = new HashSet<>();
+    private long missingItemsHighlightStart = 0;
+    private static final long MISSING_ITEMS_HIGHLIGHT_DURATION = 2000; // 2 seconds
 
     public RecipeScreen(Item item) {
         super(Text.literal("Recipe Viewer"));
@@ -373,6 +382,15 @@ public class RecipeScreen extends Screen {
             this.addDrawableChild(recipeTypeButton);
         }
 
+        // Craft button - only show for crafting recipes
+        if (recipe != null && isCraftingRecipe(recipe)) {
+            craftButton = ButtonWidget.builder(
+                Text.literal("Craft"),
+                button -> handleCraftButtonClick()
+            ).dimensions(ITEM_LIST_WIDTH + MARGIN, height - 40, 80, 20).build();
+            this.addDrawableChild(craftButton);
+        }
+
         // Restore preserved state
         searchField.setText(preservedSearchText);
         scrollOffset = preservedScrollOffset;
@@ -535,7 +553,22 @@ public class RecipeScreen extends Screen {
         Map<Character, ItemStack> keyMap = new HashMap<>();
         for (Map.Entry<String, JsonElement> entry : key.entrySet()) {
             char symbol = entry.getKey().charAt(0);
-            String id = entry.getValue().getAsString();
+            JsonElement ingredientElement = entry.getValue();
+
+            // Handle both single items and ingredient arrays
+            String id;
+            if (ingredientElement.isJsonArray()) {
+                // Multiple options for this ingredient slot - use the first one for display
+                JsonArray options = ingredientElement.getAsJsonArray();
+                if (options.size() > 0) {
+                    id = options.get(0).getAsString();
+                } else {
+                    id = "minecraft:barrier"; // Fallback
+                }
+            } else {
+                id = ingredientElement.getAsString();
+            }
+
             Item item = resolveItemFromIdOrTag(id);
             keyMap.put(symbol, new ItemStack(item));
         }
@@ -1225,12 +1258,18 @@ public class RecipeScreen extends Screen {
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-        // Handle Escape key (256) and E key (69) to return to inventory
+        // Handle Escape key (256) and E key (69) to return to previous GUI
         // But only if search field is not focused
         if ((keyCode == 256 || keyCode == 69) && !searchField.isFocused()) { // GLFW_KEY_ESCAPE or GLFW_KEY_E
             if (client != null) {
-                // Open the inventory screen to return to inventory
-                client.setScreen(new net.minecraft.client.gui.screen.ingame.InventoryScreen(client.player));
+                // Return to the previous screen if available, otherwise default to inventory
+                Screen previousScreen = ItemListOverlay.getPreviousScreen();
+                if (previousScreen != null) {
+                    client.setScreen(previousScreen);
+                } else {
+                    // Fallback to inventory screen
+                    client.setScreen(new net.minecraft.client.gui.screen.ingame.InventoryScreen(client.player));
+                }
                 return true;
             }
         }
@@ -1364,6 +1403,310 @@ public class RecipeScreen extends Screen {
                     " (" + Character.toUpperCase(materialName.charAt(0)) + materialName.substring(1) + ")");
 
                 allRecipes.add(trimRecipe);
+            }
+        }
+    }
+
+    private boolean isCraftingRecipe(JsonObject recipe) {
+        // Check if the recipe is a crafting type (shaped, shapeless, transmute)
+        String type = recipe.get("type").getAsString();
+        return "minecraft:crafting_shaped".equals(type) ||
+               "minecraft:crafting_shapeless".equals(type) ||
+               "minecraft:crafting_transmute".equals(type);
+    }
+
+    private void handleCraftButtonClick() {
+        if (recipe == null || !isCraftingRecipe(recipe)) {
+            return;
+        }
+
+        // Get the ingredients needed for the recipe
+        List<ItemStack> requiredItems = getRequiredIngredients(recipe);
+        
+        // Check if player has all required items
+        if (client.player == null) {
+            return;
+        }
+
+        Map<Item, Integer> playerInventory = getPlayerInventory();
+        missingItems.clear();
+        
+        boolean hasAllItems = true;
+        Map<Item, Integer> requiredCounts = new HashMap<>();
+        
+        // Count required items
+        for (ItemStack required : requiredItems) {
+            Item item = required.getItem();
+            int count = required.getCount();
+            requiredCounts.merge(item, count, Integer::sum);
+        }
+        
+        // Check if player has enough of each item
+        for (Map.Entry<Item, Integer> entry : requiredCounts.entrySet()) {
+            Item item = entry.getKey();
+            int required = entry.getValue();
+            int available = playerInventory.getOrDefault(item, 0);
+            
+            if (available < required) {
+                missingItems.add(item);
+                hasAllItems = false;
+            }
+        }
+        
+        if (hasAllItems) {
+            // Check if we're in a crafting table GUI
+            Screen previousScreen = ItemListOverlay.getPreviousScreen();
+            if (previousScreen instanceof net.minecraft.client.gui.screen.ingame.CraftingScreen) {
+                // Put items into crafting table and return to crafting GUI
+                placeCraftingItems(recipe, previousScreen);
+                client.setScreen(previousScreen);
+            } else {
+                // Show message that crafting table is needed
+                if (client.player != null) {
+                    client.player.sendMessage(Text.literal("Open a crafting table to auto-craft this recipe"), true);
+                }
+            }
+        } else {
+            // Highlight missing items in red for 2 seconds
+            missingItemsHighlightStart = System.currentTimeMillis();
+        }
+    }
+
+    private List<ItemStack> getRequiredIngredients(JsonObject recipe) {
+        List<ItemStack> ingredients = new ArrayList<>();
+        String type = recipe.get("type").getAsString();
+        
+        switch (type) {
+            case "minecraft:crafting_shaped":
+                JsonArray pattern = recipe.getAsJsonArray("pattern");
+                JsonObject key = recipe.getAsJsonObject("key");
+                
+                for (JsonElement patternRow : pattern) {
+                    String row = patternRow.getAsString();
+                    for (char symbol : row.toCharArray()) {
+                        if (symbol != ' ' && key.has(String.valueOf(symbol))) {
+                            String itemId = key.get(String.valueOf(symbol)).getAsString();
+                            Item item = resolveItemFromIdOrTag(itemId);
+                            ingredients.add(new ItemStack(item, 1));
+                        }
+                    }
+                }
+                break;
+                
+            case "minecraft:crafting_shapeless":
+                if (recipe.has("ingredients")) {
+                    JsonArray ingredientsArray = recipe.getAsJsonArray("ingredients");
+                    for (JsonElement ingredient : ingredientsArray) {
+                        String itemId;
+                        if (ingredient.isJsonArray()) {
+                            // Take first option for ingredient arrays
+                            itemId = ingredient.getAsJsonArray().get(0).getAsString();
+                        } else {
+                            itemId = ingredient.getAsString();
+                        }
+                        Item item = resolveItemFromIdOrTag(itemId);
+                        ingredients.add(new ItemStack(item, 1));
+                    }
+                }
+                break;
+                
+            case "minecraft:crafting_transmute":
+                // Base item + dye
+                ingredients.add(new ItemStack(targetItem, 1));
+                JsonElement resultElement = recipe.get("result");
+                String resultId;
+                if (resultElement.isJsonObject()) {
+                    resultId = resultElement.getAsJsonObject().get("id").getAsString();
+                } else {
+                    resultId = resultElement.getAsString();
+                }
+                Item dye = getDyeForItem(resultId);
+                if (dye != null) {
+                    ingredients.add(new ItemStack(dye, 1));
+                }
+                break;
+        }
+        
+        return ingredients;
+    }
+
+    private Map<Item, Integer> getPlayerInventory() {
+        Map<Item, Integer> inventory = new HashMap<>();
+        if (client.player == null) {
+            return inventory;
+        }
+        
+        // Count items in player inventory
+        for (int i = 0; i < client.player.getInventory().size(); i++) {
+            ItemStack stack = client.player.getInventory().getStack(i);
+            if (!stack.isEmpty()) {
+                inventory.merge(stack.getItem(), stack.getCount(), Integer::sum);
+            }
+        }
+        
+        return inventory;
+    }
+
+    private void placeCraftingItems(JsonObject recipe, Screen craftingScreen) {
+        if (!(craftingScreen instanceof CraftingScreen)) {
+            return;
+        }
+        
+        CraftingScreen craftingScreenInstance = (CraftingScreen) craftingScreen;
+        CraftingScreenHandler handler = craftingScreenInstance.getScreenHandler();
+        
+        if (client.player == null || client.interactionManager == null) {
+            return;
+        }
+        
+        // Clear existing items from crafting grid (slots 1-9)
+        for (int slot = 1; slot <= 9; slot++) {
+            if (!handler.getSlot(slot).getStack().isEmpty()) {
+                // Move item back to inventory
+                client.interactionManager.clickSlot(handler.syncId, slot, 0, SlotActionType.QUICK_MOVE, client.player);
+            }
+        }
+        
+        String type = recipe.get("type").getAsString();
+        
+        switch (type) {
+            case "minecraft:crafting_shaped":
+                placeCraftingItemsShaped(recipe, handler);
+                break;
+            case "minecraft:crafting_shapeless":
+                placeCraftingItemsShapeless(recipe, handler);
+                break;
+            case "minecraft:crafting_transmute":
+                placeCraftingItemsTransmute(recipe, handler);
+                break;
+        }
+        
+        if (client.player != null) {
+            client.player.sendMessage(Text.literal("Items placed in crafting table!"), true);
+        }
+    }
+    
+    private void placeCraftingItemsShaped(JsonObject recipe, CraftingScreenHandler handler) {
+        JsonArray pattern = recipe.getAsJsonArray("pattern");
+        JsonObject key = recipe.getAsJsonObject("key");
+        
+        Map<Character, String> keyMap = new HashMap<>();
+        for (Map.Entry<String, JsonElement> entry : key.entrySet()) {
+            char symbol = entry.getKey().charAt(0);
+            JsonElement ingredientElement = entry.getValue();
+            
+            String id;
+            if (ingredientElement.isJsonArray()) {
+                JsonArray options = ingredientElement.getAsJsonArray();
+                if (options.size() > 0) {
+                    id = options.get(0).getAsString();
+                } else {
+                    continue;
+                }
+            } else {
+                id = ingredientElement.getAsString();
+            }
+            keyMap.put(symbol, id);
+        }
+        
+        // Place items according to pattern
+        for (int row = 0; row < pattern.size() && row < 3; row++) {
+            String line = pattern.get(row).getAsString();
+            for (int col = 0; col < line.length() && col < 3; col++) {
+                char symbol = line.charAt(col);
+                if (symbol != ' ' && keyMap.containsKey(symbol)) {
+                    String itemId = keyMap.get(symbol);
+                    Item item = resolveItemFromIdOrTag(itemId);
+                    int slot = 1 + row * 3 + col; // Convert to slot index (1-9)
+                    moveItemToSlot(handler, item, slot);
+                }
+            }
+        }
+    }
+    
+    private void placeCraftingItemsShapeless(JsonObject recipe, CraftingScreenHandler handler) {
+        List<String> ingredientIds = new ArrayList<>();
+        
+        if (recipe.has("ingredients")) {
+            JsonArray ingredients = recipe.getAsJsonArray("ingredients");
+            for (JsonElement el : ingredients) {
+                if (el.isJsonArray()) {
+                    JsonArray options = el.getAsJsonArray();
+                    if (options.size() > 0) {
+                        ingredientIds.add(options.get(0).getAsString());
+                    }
+                } else {
+                    ingredientIds.add(el.getAsString());
+                }
+            }
+        }
+        
+        // Place items in order starting from slot 1
+        for (int i = 0; i < ingredientIds.size() && i < 9; i++) {
+            String itemId = ingredientIds.get(i);
+            Item item = resolveItemFromIdOrTag(itemId);
+            int slot = 1 + i; // Slots 1-9
+            moveItemToSlot(handler, item, slot);
+        }
+    }
+    
+    private void placeCraftingItemsTransmute(JsonObject recipe, CraftingScreenHandler handler) {
+        // Place base item in center (slot 5)
+        moveItemToSlot(handler, targetItem, 5);
+        
+        // Place dye in top-left (slot 1)
+        JsonElement resultElement = recipe.get("result");
+        String resultId;
+        if (resultElement.isJsonObject()) {
+            resultId = resultElement.getAsJsonObject().get("id").getAsString();
+        } else {
+            resultId = resultElement.getAsString();
+        }
+        
+        Item dye = getDyeForItem(resultId);
+        if (dye != null) {
+            moveItemToSlot(handler, dye, 1);
+        }
+    }
+    
+    private void moveItemToSlot(CraftingScreenHandler handler, Item targetItem, int targetSlot) {
+        if (client.player == null || client.interactionManager == null) {
+            return;
+        }
+        
+        // Find the item in player inventory
+        for (int i = 0; i < client.player.getInventory().size(); i++) {
+            ItemStack stack = client.player.getInventory().getStack(i);
+            if (!stack.isEmpty() && stack.getItem() == targetItem) {
+                // Find the corresponding slot in the screen handler
+                int screenSlot = -1;
+                
+                // Player inventory slots in crafting screen are typically after crafting slots
+                // Slots 0-9 are crafting area, 10+ are player inventory
+                if (i < 9) {
+                    // Hotbar
+                    screenSlot = 37 + i; // Adjust based on actual screen handler layout
+                } else if (i < 36) {
+                    // Main inventory
+                    screenSlot = 10 + (i - 9);
+                } else {
+                    // Hotbar (alternative indexing)
+                    screenSlot = 28 + (i - 27);
+                }
+                
+                if (screenSlot != -1 && screenSlot < handler.slots.size()) {
+                    // Pick up one item from inventory
+                    client.interactionManager.clickSlot(handler.syncId, screenSlot, 1, SlotActionType.PICKUP, client.player);
+                    
+                    // Place it in the crafting slot
+                    client.interactionManager.clickSlot(handler.syncId, targetSlot, 1, SlotActionType.PICKUP, client.player);
+                    
+                    // If we picked up more than we needed, put the rest back
+                    if (!client.player.currentScreenHandler.getCursorStack().isEmpty()) {
+                        client.interactionManager.clickSlot(handler.syncId, screenSlot, 0, SlotActionType.PICKUP, client.player);
+                    }
+                    break;
+                }
             }
         }
     }

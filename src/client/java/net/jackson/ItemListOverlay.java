@@ -3,6 +3,7 @@ package net.jackson;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.client.util.math.Rect2i;
 import net.minecraft.item.Item;
@@ -37,6 +38,17 @@ public class ItemListOverlay {
     private static String lastSearchText = "";
     private static boolean searchFieldInitialized = false;
     private static boolean searchFieldFocused = false; // Track focus state separately
+
+    // GUI tracking for navigation
+    private static Screen previousScreen = null;
+
+    public static void setPreviousScreen(Screen screen) {
+        previousScreen = screen;
+    }
+
+    public static Screen getPreviousScreen() {
+        return previousScreen;
+    }
 
     public static void reloadItems() {
         ALL_ITEMS.clear();
@@ -400,6 +412,8 @@ public class ItemListOverlay {
             if (mouseX >= rect.getX() && mouseX <= rect.getX() + rect.getWidth() &&
                     mouseY >= rect.getY() && mouseY <= rect.getY() + rect.getHeight()) {
 
+                // Store the current screen before navigating to recipe screen
+                setPreviousScreen(MinecraftClient.getInstance().currentScreen);
                 MinecraftClient.getInstance().setScreen(new RecipeScreen(entry.getValue()));
                 return true;
             }
