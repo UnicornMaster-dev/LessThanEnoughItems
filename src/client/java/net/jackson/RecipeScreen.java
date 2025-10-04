@@ -463,8 +463,10 @@ public class RecipeScreen extends Screen {
         int recipeX = ITEM_LIST_WIDTH + MARGIN;
         int recipeY = allRecipes.size() > 1 ? 60 : 40; // Leave space for recipe type button if needed
 
+        // Format the item name properly instead of showing raw ID
+        String formattedItemName = formatItemName(Registries.ITEM.getId(targetItem).getPath());
         context.drawCenteredTextWithShadow(this.textRenderer,
-            Text.literal("Recipe: " + Registries.ITEM.getId(targetItem).getPath()),
+            Text.literal("Recipe: " + formattedItemName),
             ITEM_LIST_WIDTH + RECIPE_AREA_WIDTH / 2, 20, 0xFFFFFF);
 
         if (recipe == null) {
@@ -478,22 +480,22 @@ public class RecipeScreen extends Screen {
 
         switch (type) {
             case "minecraft:crafting_shaped":
-                renderShapedCrafting(context, recipe, recipeX, recipeY);
+                renderShapedCrafting(context, recipe, recipeX, recipeY, mouseX, mouseY);
                 break;
             case "minecraft:crafting_shapeless":
-                renderShapelessCrafting(context, recipe, recipeX, recipeY);
+                renderShapelessCrafting(context, recipe, recipeX, recipeY, mouseX, mouseY);
                 break;
             case "minecraft:crafting_transmute":
-                renderTransmuteCrafting(context, recipe, recipeX, recipeY);
+                renderTransmuteCrafting(context, recipe, recipeX, recipeY, mouseX, mouseY);
                 break;
             case "minecraft:blasting":
             case "minecraft:smelting":
             case "minecraft:smoking":
             case "minecraft:campfire_cooking":
-                renderCooking(context, recipe, type, recipeX, recipeY);
+                renderCooking(context, recipe, type, recipeX, recipeY, mouseX, mouseY);
                 break;
             case "minecraft:smithing_transform":
-                renderSmithing(context, recipe, recipeX, recipeY);
+                renderSmithing(context, recipe, recipeX, recipeY, mouseX, mouseY);
                 break;
             default:
                 context.drawCenteredTextWithShadow(this.textRenderer,
@@ -503,7 +505,29 @@ public class RecipeScreen extends Screen {
         }
     }
 
-    private void renderShapedCrafting(DrawContext context, JsonObject json, int startX, int startY) {
+    // Helper method to format item names from IDs to proper display names
+    private String formatItemName(String itemId) {
+        // Split by underscores and capitalize each word
+        String[] words = itemId.split("_");
+        StringBuilder result = new StringBuilder();
+
+        for (int i = 0; i < words.length; i++) {
+            if (i > 0) result.append(" ");
+
+            String word = words[i];
+            if (word.length() > 0) {
+                // Capitalize first letter and make rest lowercase
+                result.append(Character.toUpperCase(word.charAt(0)));
+                if (word.length() > 1) {
+                    result.append(word.substring(1).toLowerCase());
+                }
+            }
+        }
+
+        return result.toString();
+    }
+
+    private void renderShapedCrafting(DrawContext context, JsonObject json, int startX, int startY, int mouseX, int mouseY) {
         JsonArray pattern = json.getAsJsonArray("pattern");
         JsonObject key = json.getAsJsonObject("key");
         JsonObject result = json.getAsJsonObject("result");
@@ -524,6 +548,10 @@ public class RecipeScreen extends Screen {
             }
         }
 
+        // Track hovered items for tooltips
+        Item hoveredRecipeItem = null;
+        int hoveredSlotX = -1, hoveredSlotY = -1;
+
         // Draw pattern items
         for (int row = 0; row < pattern.size() && row < gridSize; row++) {
             String line = pattern.get(row).getAsString();
@@ -532,7 +560,17 @@ public class RecipeScreen extends Screen {
                 if (symbol != ' ') {
                     ItemStack stack = keyMap.getOrDefault(symbol, ItemStack.EMPTY);
                     if (!stack.isEmpty()) {
-                        context.drawItem(stack, startX + col * 20 + 1, startY + row * 20 + 1);
+                        int itemX = startX + col * 20 + 1;
+                        int itemY = startY + row * 20 + 1;
+                        context.drawItem(stack, itemX, itemY);
+
+                        // Check for hover on this ingredient
+                        if (mouseX >= itemX && mouseX <= itemX + 16 &&
+                            mouseY >= itemY && mouseY <= itemY + 16) {
+                            hoveredRecipeItem = stack.getItem();
+                            hoveredSlotX = itemX;
+                            hoveredSlotY = itemY;
+                        }
                     }
                 }
             }
@@ -547,22 +585,40 @@ public class RecipeScreen extends Screen {
         drawSlot(context, startX + 100, startY + 20, false);
         int count = result.has("count") ? result.get("count").getAsInt() : 1;
         ItemStack resultStack = new ItemStack(resolveItemFromIdOrTag(result.get("id").getAsString()), count);
-        context.drawItem(resultStack, startX + 101, startY + 21);
+        int resultX = startX + 101;
+        int resultY = startY + 21;
+        context.drawItem(resultStack, resultX, resultY);
+
+        // Check for hover on result item
+        if (mouseX >= resultX && mouseX <= resultX + 16 &&
+            mouseY >= resultY && mouseY <= resultY + 16) {
+            hoveredRecipeItem = resultStack.getItem();
+            hoveredSlotX = resultX;
+            hoveredSlotY = resultY;
+        }
 
         // Draw count text manually if more than 1
         if (count > 1) {
             String countText = String.valueOf(count);
             int textX = startX + 101 + 16 - this.textRenderer.getWidth(countText);
-            int textY = startY + 21 + 6; // Fixed positioning - use startY and reduce offset
-            // Draw with shadow and higher z-level to ensure it's in front
+            int textY = startY + 21 + 6;
             context.getMatrices().push();
             context.getMatrices().translate(0, 0, 200);
             context.drawText(this.textRenderer, countText, textX, textY, 0xFFFFFF, true);
             context.getMatrices().pop();
         }
+
+        // Render tooltip for hovered recipe item at highest z-level
+        if (hoveredRecipeItem != null) {
+            context.getMatrices().push();
+            context.getMatrices().translate(0, 0, 500); // Even higher than item list tooltips
+            ItemStack stack = new ItemStack(hoveredRecipeItem);
+            context.drawTooltip(this.textRenderer, List.of(stack.getName()), mouseX, mouseY);
+            context.getMatrices().pop();
+        }
     }
 
-    private void renderShapelessCrafting(DrawContext context, JsonObject json, int startX, int startY) {
+    private void renderShapelessCrafting(DrawContext context, JsonObject json, int startX, int startY, int mouseX, int mouseY) {
         List<String> ingredientIds = new ArrayList<>();
         if (json.has("ingredients")) {
             JsonArray ingredients = json.getAsJsonArray("ingredients");
@@ -598,13 +654,24 @@ public class RecipeScreen extends Screen {
             }
         }
 
+        // Track hovered items for tooltips
+        Item hoveredRecipeItem = null;
+
         // Draw ingredients
         for (int i = 0; i < ingredientIds.size() && i < 9; i++) {
             int row = i / 3;
             int col = i % 3;
             String id = ingredientIds.get(i);
             Item item = resolveItemFromIdOrTag(id);
-            context.drawItem(new ItemStack(item), startX + col * 20 + 1, startY + row * 20 + 1);
+            int itemX = startX + col * 20 + 1;
+            int itemY = startY + row * 20 + 1;
+            context.drawItem(new ItemStack(item), itemX, itemY);
+
+            // Check for hover on this ingredient
+            if (mouseX >= itemX && mouseX <= itemX + 16 &&
+                mouseY >= itemY && mouseY <= itemY + 16) {
+                hoveredRecipeItem = item;
+            }
         }
 
         // Draw arrow
@@ -617,22 +684,39 @@ public class RecipeScreen extends Screen {
         drawSlot(context, startX + 100, startY + 20, false);
         int count = result.has("count") ? result.get("count").getAsInt() : 1;
         ItemStack resultStack = new ItemStack(resolveItemFromIdOrTag(result.get("id").getAsString()), count);
-        context.drawItem(resultStack, startX + 101, startY + 21);
+        int resultX = startX + 101;
+        int resultY = startY + 21;
+        context.drawItem(resultStack, resultX, resultY);
+
+        // Check for hover on result item
+        if (mouseX >= resultX && mouseX <= resultX + 16 &&
+            mouseY >= resultY && mouseY <= resultY + 16) {
+            hoveredRecipeItem = resultStack.getItem();
+        }
 
         // Draw count text manually if more than 1 (render in front)
         if (count > 1) {
             String countText = String.valueOf(count);
             int textX = startX + 101 + 16 - this.textRenderer.getWidth(countText);
-            int textY = startY + 21 + 16 - this.textRenderer.fontHeight;
+            int textY = startX + 21 + 16 - this.textRenderer.fontHeight;
             // Draw with shadow and higher z-level to ensure it's in front
             context.getMatrices().push();
             context.getMatrices().translate(0, 0, 200);
             context.drawText(this.textRenderer, countText, textX, textY, 0xFFFFFF, true);
             context.getMatrices().pop();
         }
+
+        // Render tooltip for hovered recipe item at highest z-level
+        if (hoveredRecipeItem != null) {
+            context.getMatrices().push();
+            context.getMatrices().translate(0, 0, 500); // Even higher than item list tooltips
+            ItemStack stack = new ItemStack(hoveredRecipeItem);
+            context.drawTooltip(this.textRenderer, List.of(stack.getName()), mouseX, mouseY);
+            context.getMatrices().pop();
+        }
     }
 
-    private void renderTransmuteCrafting(DrawContext context, JsonObject json, int startX, int startY) {
+    private void renderTransmuteCrafting(DrawContext context, JsonObject json, int startX, int startY, int mouseX, int mouseY) {
         // For transmute recipes, show it as a proper crafting recipe with base item + dye
         JsonElement resultElement = json.get("result");
         JsonObject result;
@@ -661,14 +745,33 @@ public class RecipeScreen extends Screen {
             }
         }
 
+        // Track hovered items for tooltips
+        Item hoveredRecipeItem = null;
+
         // Place the base item in center (1,1)
-        context.drawItem(new ItemStack(targetItem), startX + 20 + 1, startY + 20 + 1);
+        int baseX = startX + 20 + 1;
+        int baseY = startY + 20 + 1;
+        context.drawItem(new ItemStack(targetItem), baseX, baseY);
+
+        // Check for hover on base item
+        if (mouseX >= baseX && mouseX <= baseX + 16 &&
+            mouseY >= baseY && mouseY <= baseY + 16) {
+            hoveredRecipeItem = targetItem;
+        }
 
         // Determine and place the dye based on the result color
         Item dye = getDyeForItem(resultId);
         if (dye != null) {
             // Place dye in top-left corner (0,0)
-            context.drawItem(new ItemStack(dye), startX + 1, startY + 1);
+            int dyeX = startX + 1;
+            int dyeY = startY + 1;
+            context.drawItem(new ItemStack(dye), dyeX, dyeY);
+
+            // Check for hover on dye item
+            if (mouseX >= dyeX && mouseX <= dyeX + 16 &&
+                mouseY >= dyeY && mouseY <= dyeY + 16) {
+                hoveredRecipeItem = dye;
+            }
         }
 
         // Draw arrow
@@ -678,7 +781,15 @@ public class RecipeScreen extends Screen {
 
         // Draw result slot and item
         drawSlot(context, startX + 100, startY + 20, false);
-        context.drawItem(resultStack, startX + 101, startY + 21);
+        int resultX = startX + 101;
+        int resultY = startY + 21;
+        context.drawItem(resultStack, resultX, resultY);
+
+        // Check for hover on result item
+        if (mouseX >= resultX && mouseX <= resultX + 16 &&
+            mouseY >= resultY && mouseY <= resultY + 16) {
+            hoveredRecipeItem = resultStack.getItem();
+        }
 
         // Draw count text manually if more than 1
         if (count > 1) {
@@ -695,6 +806,15 @@ public class RecipeScreen extends Screen {
         context.drawTextWithShadow(this.textRenderer, Text.literal("Dye"), startX, startY + 65, 0xAAAAAA);
         context.drawTextWithShadow(this.textRenderer, Text.literal("Base"), startX + 20, startY + 65, 0xAAAAAA);
         context.drawTextWithShadow(this.textRenderer, Text.literal("Result"), startX + 100, startY + 45, 0xAAAAAA);
+
+        // Render tooltip for hovered recipe item at highest z-level
+        if (hoveredRecipeItem != null) {
+            context.getMatrices().push();
+            context.getMatrices().translate(0, 0, 500); // Even higher than item list tooltips
+            ItemStack stack = new ItemStack(hoveredRecipeItem);
+            context.drawTooltip(this.textRenderer, List.of(stack.getName()), mouseX, mouseY);
+            context.getMatrices().pop();
+        }
     }
 
     // Helper method to determine the dye needed for a colored item
@@ -718,29 +838,56 @@ public class RecipeScreen extends Screen {
         return null; // No dye needed
     }
 
-    private void renderSmithing(DrawContext context, JsonObject json, int startX, int startY) {
+    private void renderSmithing(DrawContext context, JsonObject json, int startX, int startY, int mouseX, int mouseY) {
         // Draw smithing table slots
         drawSlot(context, startX, startY, false); // Template
         drawSlot(context, startX + 25, startY, false); // Base
         drawSlot(context, startX + 50, startY, false); // Addition
         drawSlot(context, startX + 100, startY, false); // Result
 
+        // Track hovered items for tooltips
+        Item hoveredRecipeItem = null;
+
         // Draw template
         if (json.has("template")) {
             Item template = resolveItemFromIdOrTag(json.get("template").getAsString());
-            context.drawItem(new ItemStack(template), startX + 1, startY + 1);
+            int templateX = startX + 1;
+            int templateY = startY + 1;
+            context.drawItem(new ItemStack(template), templateX, templateY);
+
+            // Check for hover on template
+            if (mouseX >= templateX && mouseX <= templateX + 16 &&
+                mouseY >= templateY && mouseY <= templateY + 16) {
+                hoveredRecipeItem = template;
+            }
         }
 
         // Draw base item
         if (json.has("base")) {
             Item base = resolveItemFromIdOrTag(json.get("base").getAsString());
-            context.drawItem(new ItemStack(base), startX + 26, startY + 1);
+            int baseX = startX + 26;
+            int baseY = startY + 1;
+            context.drawItem(new ItemStack(base), baseX, baseY);
+
+            // Check for hover on base
+            if (mouseX >= baseX && mouseX <= baseX + 16 &&
+                mouseY >= baseY && mouseY <= baseY + 16) {
+                hoveredRecipeItem = base;
+            }
         }
 
         // Draw addition item
         if (json.has("addition")) {
             Item addition = resolveItemFromIdOrTag(json.get("addition").getAsString());
-            context.drawItem(new ItemStack(addition), startX + 51, startY + 1);
+            int additionX = startX + 51;
+            int additionY = startY + 1;
+            context.drawItem(new ItemStack(addition), additionX, additionY);
+
+            // Check for hover on addition
+            if (mouseX >= additionX && mouseX <= additionX + 16 &&
+                mouseY >= additionY && mouseY <= additionY + 16) {
+                hoveredRecipeItem = addition;
+            }
         }
 
         // Draw arrow
@@ -752,7 +899,15 @@ public class RecipeScreen extends Screen {
         JsonObject result = json.getAsJsonObject("result");
         int count = result.has("count") ? result.get("count").getAsInt() : 1;
         ItemStack resultStack = new ItemStack(resolveItemFromIdOrTag(result.get("id").getAsString()), count);
-        context.drawItem(resultStack, startX + 101, startY + 1);
+        int resultX = startX + 101;
+        int resultY = startY + 1;
+        context.drawItem(resultStack, resultX, resultY);
+
+        // Check for hover on result
+        if (mouseX >= resultX && mouseX <= resultX + 16 &&
+            mouseY >= resultY && mouseY <= resultY + 16) {
+            hoveredRecipeItem = resultStack.getItem();
+        }
 
         // Draw count text manually if more than 1
         if (count > 1) {
@@ -767,9 +922,18 @@ public class RecipeScreen extends Screen {
         context.drawTextWithShadow(this.textRenderer, Text.literal("Base"), startX + 25, startY + 25, 0xAAAAA);
         context.drawTextWithShadow(this.textRenderer, Text.literal("Addition"), startX + 50, startY + 25, 0xAAAAA);
         context.drawTextWithShadow(this.textRenderer, Text.literal("Result"), startX + 100, startY + 25, 0xAAAAA);
+
+        // Render tooltip for hovered recipe item at highest z-level
+        if (hoveredRecipeItem != null) {
+            context.getMatrices().push();
+            context.getMatrices().translate(0, 0, 500); // Even higher than item list tooltips
+            ItemStack stack = new ItemStack(hoveredRecipeItem);
+            context.drawTooltip(this.textRenderer, List.of(stack.getName()), mouseX, mouseY);
+            context.getMatrices().pop();
+        }
     }
 
-    private void renderCooking(DrawContext context, JsonObject json, String type, int startX, int startY) {
+    private void renderCooking(DrawContext context, JsonObject json, String type, int startX, int startY, int mouseX, int mouseY) {
         // Handle single or multiple ingredients
         List<String> ingredientIds = new ArrayList<>();
         if (json.get("ingredient").isJsonArray()) {
@@ -795,15 +959,34 @@ public class RecipeScreen extends Screen {
         drawSlot(context, startX, startY + 40, false); // Fuel slot (placeholder)
         drawSlot(context, startX + 80, startY + 20, false); // Result slot
 
+        // Track hovered items for tooltips
+        Item hoveredRecipeItem = null;
+
         // Draw ingredient
         if (!ingredientIds.isEmpty()) {
             String id = ingredientIds.get(ingredientCycleIndex);
             Item item = resolveItemFromIdOrTag(id);
-            context.drawItem(new ItemStack(item), startX + 1, startY + 1);
+            int ingredientX = startX + 1;
+            int ingredientY = startY + 1;
+            context.drawItem(new ItemStack(item), ingredientX, ingredientY);
+
+            // Check for hover on ingredient
+            if (mouseX >= ingredientX && mouseX <= ingredientX + 16 &&
+                mouseY >= ingredientY && mouseY <= ingredientY + 16) {
+                hoveredRecipeItem = item;
+            }
         }
 
         // Draw fuel (coal as example)
-        context.drawItem(new ItemStack(Items.COAL), startX + 1, startY + 41);
+        int fuelX = startX + 1;
+        int fuelY = startY + 41;
+        context.drawItem(new ItemStack(Items.COAL), fuelX, fuelY);
+
+        // Check for hover on fuel
+        if (mouseX >= fuelX && mouseX <= fuelX + 16 &&
+            mouseY >= fuelY && mouseY <= fuelY + 16) {
+            hoveredRecipeItem = Items.COAL;
+        }
 
         // Draw furnace progress arrow
         context.drawTexture(RenderLayer::getGuiTextured,
@@ -825,7 +1008,15 @@ public class RecipeScreen extends Screen {
         JsonObject result = json.getAsJsonObject("result");
         int count = result.has("count") ? result.get("count").getAsInt() : 1;
         ItemStack resultStack = new ItemStack(resolveItemFromIdOrTag(result.get("id").getAsString()), count);
-        context.drawItem(resultStack, startX + 81, startY + 21);
+        int resultX = startX + 81;
+        int resultY = startY + 21;
+        context.drawItem(resultStack, resultX, resultY);
+
+        // Check for hover on result item
+        if (mouseX >= resultX && mouseX <= resultX + 16 &&
+            mouseY >= resultY && mouseY <= resultY + 16) {
+            hoveredRecipeItem = resultStack.getItem();
+        }
 
         // Draw count text manually if more than 1
         if (count > 1) {
@@ -834,6 +1025,15 @@ public class RecipeScreen extends Screen {
             int textY = startY + 21 + 16 - this.textRenderer.fontHeight;
             // Draw with shadow and higher z-level to ensure it's in front
             context.drawText(this.textRenderer, countText, textX, textY, 0xFFFFFF, true);
+        }
+
+        // Render tooltip for hovered recipe item at highest z-level
+        if (hoveredRecipeItem != null) {
+            context.getMatrices().push();
+            context.getMatrices().translate(0, 0, 500); // Even higher than item list tooltips
+            ItemStack stack = new ItemStack(hoveredRecipeItem);
+            context.drawTooltip(this.textRenderer, List.of(stack.getName()), mouseX, mouseY);
+            context.getMatrices().pop();
         }
     }
 

@@ -12,7 +12,7 @@ public class RecipeViewerConfig {
     private static final Path CONFIG_PATH = FabricLoader.getInstance().getConfigDir().resolve("lessthanenoughitems.json");
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
-    public boolean showOnlyCraftable = false;
+    public boolean showOnlyCraftable = true; // Set to true as default
     public boolean useNewUI = true; // Enable the new UI by default
     public int itemsPerRow = 15;
     public int rowsPerPage = 20;
