@@ -3,15 +3,15 @@ package net.jackson.mixin;
 import net.jackson.ItemListOverlay;
 import net.jackson.RecipeViewerConfig;
 import net.minecraft.client.gui.DrawContext;
-import net.minecraft.client.gui.screen.ingame.HandledScreen;
+import net.minecraft.client.gui.screen.ingame.CreativeInventoryScreen;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-@Mixin(HandledScreen.class)
-public class HandledScreenMixin {
+@Mixin(CreativeInventoryScreen.class)
+public class CreativeInventoryScreenMixin {
     @Inject(method = "render", at = @At("TAIL"))
     private void onRender(DrawContext context, int mouseX, int mouseY, float delta, CallbackInfo ci) {
         if (RecipeViewerConfig.getInstance().useNewUI) {
