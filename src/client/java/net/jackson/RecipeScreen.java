@@ -404,6 +404,8 @@ public class RecipeScreen extends Screen {
         int row = 0;
         int col = 0;
 
+        Item hoveredItem = null;
+
         for (int i = scrollOffset * itemsPerRow; i < filteredItems.size() && row < (height - startY) / SLOT_SIZE; i++) {
             Item item = filteredItems.get(i);
 
@@ -419,6 +421,7 @@ public class RecipeScreen extends Screen {
                 // Draw hover effect
                 context.fill(x + col * SLOT_SIZE, y + row * SLOT_SIZE,
                            x + (col + 1) * SLOT_SIZE, y + (row + 1) * SLOT_SIZE, 0x80FFFFFF);
+                hoveredItem = item;
             }
 
             col++;
@@ -426,6 +429,15 @@ public class RecipeScreen extends Screen {
                 col = 0;
                 row++;
             }
+        }
+
+        // Render tooltip for hovered item at the end (highest z-level)
+        if (hoveredItem != null) {
+            context.getMatrices().push();
+            context.getMatrices().translate(0, 0, 400); // Highest z-level for tooltips
+            ItemStack stack = new ItemStack(hoveredItem);
+            context.drawTooltip(this.textRenderer, List.of(stack.getName()), mouseX, mouseY);
+            context.getMatrices().pop();
         }
     }
 
@@ -589,9 +601,31 @@ public class RecipeScreen extends Screen {
 
     private void renderTransmuteCrafting(DrawContext context, JsonObject json, int startX, int startY) {
         // For transmute recipes, we show the source item and the target item
-        JsonObject result = json.getAsJsonObject("result");
+        JsonElement resultElement = json.get("result");
+        JsonObject result;
+
+        // Handle both JsonObject and JsonPrimitive for result
+        if (resultElement.isJsonObject()) {
+            result = resultElement.getAsJsonObject();
+        } else if (resultElement.isJsonPrimitive()) {
+            // Create a JsonObject from the primitive string
+            result = new JsonObject();
+            result.addProperty("id", resultElement.getAsString());
+            result.addProperty("count", 1);
+        } else {
+            // Fallback case
+            result = new JsonObject();
+            result.addProperty("id", "minecraft:barrier");
+            result.addProperty("count", 1);
+        }
+
         int count = result.has("count") ? result.get("count").getAsInt() : 1;
-        ItemStack resultStack = new ItemStack(resolveItemFromIdOrTag(result.get("id").getAsString()), count);
+        String resultId = result.has("id") ? result.get("id").getAsString() : "minecraft:barrier";
+        ItemStack resultStack = new ItemStack(resolveItemFromIdOrTag(resultId), count);
+
+        // Draw slots
+        drawSlot(context, startX, startY, false); // Input slot
+        drawSlot(context, startX + 100, startY + 20, false); // Result slot
 
         // Draw the result item (target)
         context.drawItem(resultStack, startX + 101, startY + 21);
@@ -602,13 +636,14 @@ public class RecipeScreen extends Screen {
             int textX = startX + 101 + 16 - this.textRenderer.getWidth(countText);
             int textY = startY + 21 + 16 - this.textRenderer.fontHeight;
             // Draw with shadow and higher z-level to ensure it's in front
+            context.getMatrices().push();
+            context.getMatrices().translate(0, 0, 200);
             context.drawText(this.textRenderer, countText, textX, textY, 0xFFFFFF, true);
+            context.getMatrices().pop();
         }
 
-        // For transmute, the ingredient is the item itself (self-replicating)
-        String ingredientId = Registries.ITEM.getId(targetItem).getPath();
-        Item ingredientItem = resolveItemFromIdOrTag(ingredientId);
-        context.drawItem(new ItemStack(ingredientItem), startX + 1, startY + 1);
+        // For transmute, show the source item (current item being viewed)
+        context.drawItem(new ItemStack(targetItem), startX + 1, startY + 1);
 
         // Draw arrow indicating transformation
         context.drawTexture(RenderLayer::getGuiTextured,
@@ -616,7 +651,7 @@ public class RecipeScreen extends Screen {
                           startX + 70, startY + 20, 89.0f, 15.0f, 22, 15, 256, 256);
 
         // Draw labels
-        context.drawTextWithShadow(this.textRenderer, Text.literal("Transmute"), startX, startY + 25, 0xAAAAA);
+        context.drawTextWithShadow(this.textRenderer, Text.literal("Source"), startX, startY + 25, 0xAAAAA);
         context.drawTextWithShadow(this.textRenderer, Text.literal("Result"), startX + 100, startY + 25, 0xAAAAA);
     }
 
@@ -878,5 +913,20 @@ public class RecipeScreen extends Screen {
     @Override
     public boolean shouldPause() {
         return false;
+    }
+
+    @Override
+    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        // Handle Escape key (256) and E key (69) to return to inventory
+        // But only if search field is not focused
+        if ((keyCode == 256 || keyCode == 69) && !searchField.isFocused()) { // GLFW_KEY_ESCAPE or GLFW_KEY_E
+            if (client != null) {
+                // Open the inventory screen to return to inventory
+                client.setScreen(new net.minecraft.client.gui.screen.ingame.InventoryScreen(client.player));
+                return true;
+            }
+        }
+
+        return super.keyPressed(keyCode, scanCode, modifiers);
     }
 }
