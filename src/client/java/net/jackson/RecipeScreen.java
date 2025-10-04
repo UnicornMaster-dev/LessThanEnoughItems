@@ -874,6 +874,50 @@ public class RecipeScreen extends Screen {
                 return Items.NETHERITE_INGOT;
             case "#minecraft:crimson_stems":
                 return Items.CRIMSON_STEM;
+
+            // Tool material tags
+            case "#minecraft:wooden_tool_materials":
+            case "#minecraft:wood_tool_materials":
+                return Items.OAK_PLANKS;
+            case "#minecraft:stone_tool_materials":
+                return Items.COBBLESTONE;
+            case "#minecraft:iron_tool_materials":
+                return Items.IRON_INGOT;
+            case "#minecraft:golden_tool_materials":
+            case "#minecraft:gold_tool_materials":
+                return Items.GOLD_INGOT;
+            case "#minecraft:diamond_tool_materials":
+                return Items.DIAMOND;
+            case "#minecraft:netherite_upgrade_materials":
+                return Items.NETHERITE_INGOT;
+
+            // Stick for tool handles
+            case "#minecraft:tool_handles":
+            case "#minecraft:sticks":
+                return Items.STICK;
+
+            // Stone variants
+            case "#minecraft:stone_variants":
+                return Items.STONE;
+            case "#minecraft:cobblestone_variants":
+                return Items.COBBLESTONE;
+
+            // Wool and dyes
+            case "#minecraft:wool":
+                return Items.WHITE_WOOL;
+            case "#minecraft:dyes":
+                return Items.RED_DYE;
+
+            // Ingots
+            case "#minecraft:iron_ores":
+                return Items.IRON_ORE;
+            case "#minecraft:gold_ores":
+                return Items.GOLD_ORE;
+            case "#minecraft:copper_ores":
+                return Items.COPPER_ORE;
+            case "#minecraft:diamond_ores":
+                return Items.DIAMOND_ORE;
+
             default:
                 // If unknown tag, try to extract the item name and use that
                 String cleanTag = tag.replace("#minecraft:", "");
