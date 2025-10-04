@@ -5,7 +5,8 @@
 	"client": [
 		"InventoryScreenMixin",
 		"HandledScreenAccessor",
-		"HandledScreenMixin"
+		"HandledScreenMixin",
+		"ScreenMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

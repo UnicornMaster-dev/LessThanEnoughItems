@@ -22,8 +22,11 @@ import java.util.stream.Collectors;
 public class RecipeScreen extends Screen {
     private final Item targetItem;
     private JsonObject recipe;
+    private List<JsonObject> allRecipes = new ArrayList<>();
+    private int currentRecipeIndex = 0;
     private TextFieldWidget searchField;
     private ButtonWidget craftableToggleButton;
+    private ButtonWidget recipeTypeButton;
     private List<Item> allItems;
     private List<Item> filteredItems;
     private int scrollOffset = 0;
@@ -42,11 +45,12 @@ public class RecipeScreen extends Screen {
     public RecipeScreen(Item item) {
         super(Text.literal("Recipe Viewer"));
         this.targetItem = item;
-        loadRecipe();
+        loadAllRecipes();
         initializeItemList();
     }
 
     private void initializeItemList() {
+        // Use cached items from ItemListOverlay to prevent lag
         allItems = new ArrayList<>();
         for (Item item : Registries.ITEM) {
             if (item != Items.AIR) {
@@ -73,8 +77,9 @@ public class RecipeScreen extends Screen {
         } else {
             filteredItems = baseList.stream()
                 .filter(item -> {
-                    String itemName = Registries.ITEM.getId(item).getPath().toLowerCase();
-                    return itemName.contains(searchText);
+                    String itemName = item.getName().getString().toLowerCase();
+                    String itemId = Registries.ITEM.getId(item).getPath().toLowerCase();
+                    return itemName.contains(searchText) || itemId.contains(searchText);
                 })
                 .collect(Collectors.toList());
         }
@@ -85,15 +90,51 @@ public class RecipeScreen extends Screen {
 
     private boolean hasRecipe(Item item) {
         String itemName = Registries.ITEM.getId(item).getPath();
-        Identifier file = Identifier.of("jackson", "recipes/" + itemName + ".json");
 
-        try (InputStreamReader reader = new InputStreamReader(
-                Objects.requireNonNull(
-                        getClass().getClassLoader().getResourceAsStream("assets/" + file.getNamespace() + "/" + file.getPath()))
-        )) {
-            return true; // If we can load it, it has a recipe
-        } catch (Exception e) {
-            return false; // No recipe found
+        // Check for any recipe type
+        String[] recipeTypes = {"recipes", "smelting", "blasting", "smoking", "campfire_cooking"};
+        for (String type : recipeTypes) {
+            Identifier file = Identifier.of("jackson", type + "/" + itemName + ".json");
+            try (InputStreamReader reader = new InputStreamReader(
+                    Objects.requireNonNull(
+                            getClass().getClassLoader().getResourceAsStream("assets/" + file.getNamespace() + "/" + file.getPath()))
+            )) {
+                return true; // If we can load it, it has a recipe
+            } catch (Exception ignored) {}
+        }
+        return false;
+    }
+
+    private void loadAllRecipes() {
+        allRecipes.clear();
+        String itemName = Registries.ITEM.getId(targetItem).getPath();
+
+        // Try to load different recipe types
+        String[] recipeTypes = {"recipes", "smelting", "blasting", "smoking", "campfire_cooking"};
+        String[] recipeTypeNames = {"Crafting", "Smelting", "Blasting", "Smoking", "Campfire"};
+
+        for (int i = 0; i < recipeTypes.length; i++) {
+            String type = recipeTypes[i];
+            Identifier file = Identifier.of("jackson", type + "/" + itemName + ".json");
+
+            try (InputStreamReader reader = new InputStreamReader(
+                    Objects.requireNonNull(
+                            getClass().getClassLoader().getResourceAsStream("assets/" + file.getNamespace() + "/" + file.getPath()))
+            )) {
+                JsonObject recipeJson = JsonParser.parseReader(reader).getAsJsonObject();
+                // Add metadata about recipe type for display
+                recipeJson.addProperty("recipe_type_display", recipeTypeNames[i]);
+                allRecipes.add(recipeJson);
+            } catch (Exception e) {
+                // Recipe doesn't exist for this type, continue
+            }
+        }
+
+        if (!allRecipes.isEmpty()) {
+            recipe = allRecipes.get(0);
+            currentRecipeIndex = 0;
+        } else {
+            recipe = null;
         }
     }
 
@@ -101,10 +142,11 @@ public class RecipeScreen extends Screen {
     protected void init() {
         super.init();
 
-        // Search field
+        // Search field - make it properly focusable and clickable
         searchField = new TextFieldWidget(this.textRenderer, MARGIN, MARGIN, ITEM_LIST_WIDTH - 20, 20, Text.literal("Search..."));
         searchField.setPlaceholder(Text.literal("Search items..."));
         searchField.setChangedListener(this::onSearchChanged);
+        searchField.setFocusUnlocked(true); // Allow focus
         this.addSelectableChild(searchField);
 
         // Craftable filter toggle button
@@ -118,6 +160,25 @@ public class RecipeScreen extends Screen {
         ).dimensions(MARGIN, 35, ITEM_LIST_WIDTH - 20, 20).build();
         this.addDrawableChild(craftableToggleButton);
 
+        // Recipe type switching button (only show if multiple recipes exist)
+        if (allRecipes.size() > 1) {
+            String currentTypeName = recipe != null && recipe.has("recipe_type_display")
+                ? recipe.get("recipe_type_display").getAsString()
+                : "Recipe";
+            recipeTypeButton = ButtonWidget.builder(
+                Text.literal(currentTypeName + " (" + (currentRecipeIndex + 1) + "/" + allRecipes.size() + ")"),
+                button -> {
+                    currentRecipeIndex = (currentRecipeIndex + 1) % allRecipes.size();
+                    recipe = allRecipes.get(currentRecipeIndex);
+                    String typeName = recipe.has("recipe_type_display")
+                        ? recipe.get("recipe_type_display").getAsString()
+                        : "Recipe";
+                    button.setMessage(Text.literal(typeName + " (" + (currentRecipeIndex + 1) + "/" + allRecipes.size() + ")"));
+                }
+            ).dimensions(ITEM_LIST_WIDTH + MARGIN, MARGIN, RECIPE_AREA_WIDTH - 20, 20).build();
+            this.addDrawableChild(recipeTypeButton);
+        }
+
         updateMaxScroll();
     }
 
@@ -130,21 +191,6 @@ public class RecipeScreen extends Screen {
         int visibleRows = (height - 105) / SLOT_SIZE; // Adjusted for filter button
         int totalRows = (filteredItems.size() + itemsPerRow - 1) / itemsPerRow;
         maxScroll = Math.max(0, totalRows - visibleRows);
-    }
-
-    private void loadRecipe() {
-        String itemName = Registries.ITEM.getId(targetItem).getPath();
-        Identifier file = Identifier.of("jackson", "recipes/" + itemName + ".json");
-
-        try (InputStreamReader reader = new InputStreamReader(
-                Objects.requireNonNull(
-                        getClass().getClassLoader().getResourceAsStream("assets/" + file.getNamespace() + "/" + file.getPath()))
-        )) {
-            recipe = JsonParser.parseReader(reader).getAsJsonObject();
-        } catch (Exception e) {
-            System.err.println("Failed to load recipe for " + itemName);
-            recipe = null;
-        }
     }
 
     @Override
@@ -204,7 +250,7 @@ public class RecipeScreen extends Screen {
 
     private void renderRecipeArea(DrawContext context, int mouseX, int mouseY) {
         int recipeX = ITEM_LIST_WIDTH + MARGIN;
-        int recipeY = 40;
+        int recipeY = allRecipes.size() > 1 ? 60 : 40; // Leave space for recipe type button if needed
 
         context.drawCenteredTextWithShadow(this.textRenderer,
             Text.literal("Recipe: " + Registries.ITEM.getId(targetItem).getPath()),
@@ -228,6 +274,8 @@ public class RecipeScreen extends Screen {
                 break;
             case "minecraft:blasting":
             case "minecraft:smelting":
+            case "minecraft:smoking":
+            case "minecraft:campfire_cooking":
                 renderCooking(context, recipe, type, recipeX, recipeY);
                 break;
             case "minecraft:smithing_transform":
@@ -560,7 +608,9 @@ public class RecipeScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        // Prioritize search field clicks
         if (searchField.mouseClicked(mouseX, mouseY, button)) {
+            this.setFocused(searchField);
             return true;
         }
 
