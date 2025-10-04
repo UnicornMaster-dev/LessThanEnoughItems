@@ -115,8 +115,8 @@ public class RecipeScreen extends Screen {
         String itemName = Registries.ITEM.getId(targetItem).getPath();
 
         // Try to load different recipe types and variants
-        String[] recipeTypes = {"recipes", "smelting", "blasting", "smoking", "campfire_cooking"};
-        String[] recipeTypeNames = {"Crafting", "Smelting", "Blasting", "Smoking", "Campfire"};
+        String[] recipeTypes = {"recipes", "smelting", "blasting", "smoking", "campfire_cooking", "smithing"};
+        String[] recipeTypeNames = {"Crafting", "Smelting", "Blasting", "Smoking", "Campfire", "Smithing"};
 
         for (int i = 0; i < recipeTypes.length; i++) {
             String type = recipeTypes[i];
@@ -131,6 +131,9 @@ public class RecipeScreen extends Screen {
 
         // Load crafting transmute recipes for shulkers and bundles
         loadTransmuteRecipes(itemName);
+
+        // Load smithing upgrade recipes
+        loadSmithingRecipes(itemName);
 
         if (!allRecipes.isEmpty()) {
             recipe = allRecipes.get(0);
@@ -600,7 +603,7 @@ public class RecipeScreen extends Screen {
     }
 
     private void renderTransmuteCrafting(DrawContext context, JsonObject json, int startX, int startY) {
-        // For transmute recipes, we show the source item and the target item
+        // For transmute recipes, show it as a proper crafting recipe with base item + dye
         JsonElement resultElement = json.get("result");
         JsonObject result;
 
@@ -608,12 +611,10 @@ public class RecipeScreen extends Screen {
         if (resultElement.isJsonObject()) {
             result = resultElement.getAsJsonObject();
         } else if (resultElement.isJsonPrimitive()) {
-            // Create a JsonObject from the primitive string
             result = new JsonObject();
             result.addProperty("id", resultElement.getAsString());
             result.addProperty("count", 1);
         } else {
-            // Fallback case
             result = new JsonObject();
             result.addProperty("id", "minecraft:barrier");
             result.addProperty("count", 1);
@@ -623,35 +624,118 @@ public class RecipeScreen extends Screen {
         String resultId = result.has("id") ? result.get("id").getAsString() : "minecraft:barrier";
         ItemStack resultStack = new ItemStack(resolveItemFromIdOrTag(resultId), count);
 
-        // Draw slots
-        drawSlot(context, startX, startY, false); // Input slot
-        drawSlot(context, startX + 100, startY + 20, false); // Result slot
+        // Draw crafting grid background (3x3)
+        for (int row = 0; row < 3; row++) {
+            for (int col = 0; col < 3; col++) {
+                drawSlot(context, startX + col * 20, startY + row * 20, false);
+            }
+        }
 
-        // Draw the result item (target)
+        // Place the base item in center (1,1)
+        context.drawItem(new ItemStack(targetItem), startX + 20 + 1, startY + 20 + 1);
+
+        // Determine and place the dye based on the result color
+        Item dye = getDyeForItem(resultId);
+        if (dye != null) {
+            // Place dye in top-left corner (0,0)
+            context.drawItem(new ItemStack(dye), startX + 1, startY + 1);
+        }
+
+        // Draw arrow
+        context.drawTexture(RenderLayer::getGuiTextured,
+                          Identifier.of("minecraft", "textures/gui/container/crafting_table.png"),
+                          startX + 70, startY + 20, 89.0f, 15.0f, 22, 15, 256, 256);
+
+        // Draw result slot and item
+        drawSlot(context, startX + 100, startY + 20, false);
         context.drawItem(resultStack, startX + 101, startY + 21);
 
-        // Draw count text manually if more than 1 (render in front)
+        // Draw count text manually if more than 1
         if (count > 1) {
             String countText = String.valueOf(count);
             int textX = startX + 101 + 16 - this.textRenderer.getWidth(countText);
-            int textY = startY + 21 + 16 - this.textRenderer.fontHeight;
-            // Draw with shadow and higher z-level to ensure it's in front
+            int textY = startX + 21 + 6;
             context.getMatrices().push();
             context.getMatrices().translate(0, 0, 200);
             context.drawText(this.textRenderer, countText, textX, textY, 0xFFFFFF, true);
             context.getMatrices().pop();
         }
 
-        // For transmute, show the source item (current item being viewed)
-        context.drawItem(new ItemStack(targetItem), startX + 1, startY + 1);
+        // Draw labels
+        context.drawTextWithShadow(this.textRenderer, Text.literal("Dye"), startX, startY + 65, 0xAAAAAA);
+        context.drawTextWithShadow(this.textRenderer, Text.literal("Base"), startX + 20, startY + 65, 0xAAAAAA);
+        context.drawTextWithShadow(this.textRenderer, Text.literal("Result"), startX + 100, startY + 45, 0xAAAAAA);
+    }
 
-        // Draw arrow indicating transformation
+    // Helper method to determine the dye needed for a colored item
+    private Item getDyeForItem(String itemId) {
+        if (itemId.contains("white_")) return Items.WHITE_DYE;
+        if (itemId.contains("orange_")) return Items.ORANGE_DYE;
+        if (itemId.contains("magenta_")) return Items.MAGENTA_DYE;
+        if (itemId.contains("light_blue_")) return Items.LIGHT_BLUE_DYE;
+        if (itemId.contains("yellow_")) return Items.YELLOW_DYE;
+        if (itemId.contains("lime_")) return Items.LIME_DYE;
+        if (itemId.contains("pink_")) return Items.PINK_DYE;
+        if (itemId.contains("gray_")) return Items.GRAY_DYE;
+        if (itemId.contains("light_gray_")) return Items.LIGHT_GRAY_DYE;
+        if (itemId.contains("cyan_")) return Items.CYAN_DYE;
+        if (itemId.contains("purple_")) return Items.PURPLE_DYE;
+        if (itemId.contains("blue_")) return Items.BLUE_DYE;
+        if (itemId.contains("brown_")) return Items.BROWN_DYE;
+        if (itemId.contains("green_")) return Items.GREEN_DYE;
+        if (itemId.contains("red_")) return Items.RED_DYE;
+        if (itemId.contains("black_")) return Items.BLACK_DYE;
+        return null; // No dye needed
+    }
+
+    private void renderSmithing(DrawContext context, JsonObject json, int startX, int startY) {
+        // Draw smithing table slots
+        drawSlot(context, startX, startY, false); // Template
+        drawSlot(context, startX + 25, startY, false); // Base
+        drawSlot(context, startX + 50, startY, false); // Addition
+        drawSlot(context, startX + 100, startY, false); // Result
+
+        // Draw template
+        if (json.has("template")) {
+            Item template = resolveItemFromIdOrTag(json.get("template").getAsString());
+            context.drawItem(new ItemStack(template), startX + 1, startY + 1);
+        }
+
+        // Draw base item
+        if (json.has("base")) {
+            Item base = resolveItemFromIdOrTag(json.get("base").getAsString());
+            context.drawItem(new ItemStack(base), startX + 26, startY + 1);
+        }
+
+        // Draw addition item
+        if (json.has("addition")) {
+            Item addition = resolveItemFromIdOrTag(json.get("addition").getAsString());
+            context.drawItem(new ItemStack(addition), startX + 51, startY + 1);
+        }
+
+        // Draw arrow
         context.drawTexture(RenderLayer::getGuiTextured,
-                          Identifier.of("minecraft", "textures/gui/container/crafting_table.png"),
-                          startX + 70, startY + 20, 89.0f, 15.0f, 22, 15, 256, 256);
+                Identifier.of("minecraft", "textures/gui/container/smithing.png"),
+                startX + 75, startY, 44.0f, 15.0f, 20, 15, 256, 256);
+
+        // Draw result
+        JsonObject result = json.getAsJsonObject("result");
+        int count = result.has("count") ? result.get("count").getAsInt() : 1;
+        ItemStack resultStack = new ItemStack(resolveItemFromIdOrTag(result.get("id").getAsString()), count);
+        context.drawItem(resultStack, startX + 101, startY + 1);
+
+        // Draw count text manually if more than 1
+        if (count > 1) {
+            String countText = String.valueOf(count);
+            int textX = startX + 101 + 16 - this.textRenderer.getWidth(countText);
+            int textY = startY + 1 + 16 - this.textRenderer.fontHeight;
+            context.drawText(this.textRenderer, countText, textX, textY, 0xFFFFFF, true);
+        }
 
         // Draw labels
-        context.drawTextWithShadow(this.textRenderer, Text.literal("Source"), startX, startY + 25, 0xAAAAA);
+        context.drawTextWithShadow(this.textRenderer, Text.literal("Template"), startX, startY + 25, 0xAAAAA);
+        context.drawTextWithShadow(this.textRenderer, Text.literal("Base"), startX + 25, startY + 25, 0xAAAAA);
+        context.drawTextWithShadow(this.textRenderer, Text.literal("Addition"), startX + 50, startY + 25, 0xAAAAA);
         context.drawTextWithShadow(this.textRenderer, Text.literal("Result"), startX + 100, startY + 25, 0xAAAAA);
     }
 
@@ -693,19 +777,19 @@ public class RecipeScreen extends Screen {
 
         // Draw furnace progress arrow
         context.drawTexture(RenderLayer::getGuiTextured,
-                          Identifier.of("minecraft", "textures/gui/container/furnace.png"),
-                          startX + 30, startY + 20, 79.0f, 34.0f, 24, 17, 256, 256);
+                Identifier.of("minecraft", "textures/gui/container/furnace.png"),
+                startX + 30, startY + 20, 79.0f, 34.0f, 24, 17, 256, 256);
 
         // Draw cooking time
         int cookingTime = json.has("cookingtime") ? json.get("cookingtime").getAsInt() : 200;
         float experience = json.has("experience") ? json.get("experience").getAsFloat() : 0.0f;
 
         context.drawTextWithShadow(this.textRenderer,
-            Text.literal("Time: " + (cookingTime / 20.0f) + "s"),
-            startX, startY + 70, 0xAAAAA);
+                Text.literal("Time: " + (cookingTime / 20.0f) + "s"),
+                startX, startY + 70, 0xAAAAA);
         context.drawTextWithShadow(this.textRenderer,
-            Text.literal("XP: " + experience),
-            startX, startY + 85, 0xAAAAA);
+                Text.literal("XP: " + experience),
+                startX, startY + 85, 0xAAAAA);
 
         // Draw result
         JsonObject result = json.getAsJsonObject("result");
@@ -723,56 +807,6 @@ public class RecipeScreen extends Screen {
         }
     }
 
-    private void renderSmithing(DrawContext context, JsonObject json, int startX, int startY) {
-        // Draw smithing table slots
-        drawSlot(context, startX, startY, false); // Template
-        drawSlot(context, startX + 25, startY, false); // Base
-        drawSlot(context, startX + 50, startY, false); // Addition
-        drawSlot(context, startX + 100, startY, false); // Result
-
-        // Draw template
-        if (json.has("template")) {
-            Item template = resolveItemFromIdOrTag(json.get("template").getAsString());
-            context.drawItem(new ItemStack(template), startX + 1, startY + 1);
-        }
-
-        // Draw base item
-        if (json.has("base")) {
-            Item base = resolveItemFromIdOrTag(json.get("base").getAsString());
-            context.drawItem(new ItemStack(base), startX + 26, startY + 1);
-        }
-
-        // Draw addition item
-        if (json.has("addition")) {
-            Item addition = resolveItemFromIdOrTag(json.get("addition").getAsString());
-            context.drawItem(new ItemStack(addition), startX + 51, startY + 1);
-        }
-
-        // Draw arrow
-        context.drawTexture(RenderLayer::getGuiTextured,
-                          Identifier.of("minecraft", "textures/gui/container/smithing.png"),
-                          startX + 75, startY, 44.0f, 15.0f, 20, 15, 256, 256);
-
-        // Draw result
-        JsonObject result = json.getAsJsonObject("result");
-        int count = result.has("count") ? result.get("count").getAsInt() : 1;
-        ItemStack resultStack = new ItemStack(resolveItemFromIdOrTag(result.get("id").getAsString()), count);
-        context.drawItem(resultStack, startX + 101, startY + 1);
-
-        // Draw count text manually if more than 1
-        if (count > 1) {
-            String countText = String.valueOf(count);
-            int textX = startX + 101 + 16 - this.textRenderer.getWidth(countText);
-            int textY = startY + 1 + 16 - this.textRenderer.fontHeight;
-            context.drawText(this.textRenderer, countText, textX, textY, 0xFFFFFF, true);
-        }
-
-        // Draw labels
-        context.drawTextWithShadow(this.textRenderer, Text.literal("Template"), startX, startY + 25, 0xAAAAA);
-        context.drawTextWithShadow(this.textRenderer, Text.literal("Base"), startX + 25, startY + 25, 0xAAAAA);
-        context.drawTextWithShadow(this.textRenderer, Text.literal("Addition"), startX + 50, startY + 25, 0xAAAAA);
-        context.drawTextWithShadow(this.textRenderer, Text.literal("Result"), startX + 100, startY + 25, 0xAAAAA);
-    }
 
     private void drawSlot(DrawContext context, int x, int y, boolean selected) {
         int color = selected ? 0xFFFFFFFF : 0xFF8B8B8B;
@@ -928,5 +962,135 @@ public class RecipeScreen extends Screen {
         }
 
         return super.keyPressed(keyCode, scanCode, modifiers);
+    }
+
+    private void loadSmithingRecipes(String itemName) {
+        // Load smithing transform recipes for netherite items and other upgrades
+
+        // Check for netherite upgrade recipes (diamond -> netherite)
+        if (itemName.startsWith("netherite_")) {
+            String baseItem = itemName.replace("netherite_", "diamond_");
+            String recipeName = itemName + "_smithing";
+
+            Identifier file = Identifier.of("jackson", "smithing/" + recipeName + ".json");
+            try (InputStreamReader reader = new InputStreamReader(
+                    Objects.requireNonNull(
+                            getClass().getClassLoader().getResourceAsStream("assets/" + file.getNamespace() + "/" + file.getPath()))
+            )) {
+                JsonObject recipeJson = JsonParser.parseReader(reader).getAsJsonObject();
+                recipeJson.addProperty("recipe_type_display", "Smithing");
+                recipeJson.addProperty("recipe_variant", "Netherite Upgrade");
+                allRecipes.add(recipeJson);
+            } catch (Exception e) {
+                // Create a synthetic smithing recipe for netherite items
+                createSyntheticNetheriteSmithingRecipe(itemName, baseItem);
+            }
+        }
+
+        // Check for armor trimming recipes
+        if (isTrimmableArmor(itemName)) {
+            loadArmorTrimmingRecipes(itemName);
+        }
+
+        // Load any other smithing recipes that might exist
+        String[] smithingVariants = {
+            itemName + "_smithing",
+            itemName + "_from_smithing",
+            "smithing_" + itemName
+        };
+
+        for (String variant : smithingVariants) {
+            Identifier file = Identifier.of("jackson", "smithing/" + variant + ".json");
+            try (InputStreamReader reader = new InputStreamReader(
+                    Objects.requireNonNull(
+                            getClass().getClassLoader().getResourceAsStream("assets/" + file.getNamespace() + "/" + file.getPath()))
+            )) {
+                JsonObject recipeJson = JsonParser.parseReader(reader).getAsJsonObject();
+                if (!recipeJson.has("recipe_type_display")) {
+                    recipeJson.addProperty("recipe_type_display", "Smithing");
+                    recipeJson.addProperty("recipe_variant", "Standard");
+                }
+                allRecipes.add(recipeJson);
+            } catch (Exception e) {
+                // Recipe doesn't exist, continue
+            }
+        }
+    }
+
+    private void createSyntheticNetheriteSmithingRecipe(String netheriteItem, String diamondItem) {
+        // Create a synthetic smithing recipe for netherite upgrades when recipe file doesn't exist
+        JsonObject syntheticRecipe = new JsonObject();
+        syntheticRecipe.addProperty("type", "minecraft:smithing_transform");
+        syntheticRecipe.addProperty("template", "minecraft:netherite_upgrade_smithing_template");
+        syntheticRecipe.addProperty("base", "minecraft:" + diamondItem);
+        syntheticRecipe.addProperty("addition", "minecraft:netherite_ingot");
+
+        JsonObject result = new JsonObject();
+        result.addProperty("id", "minecraft:" + netheriteItem);
+        result.addProperty("count", 1);
+        syntheticRecipe.add("result", result);
+
+        syntheticRecipe.addProperty("recipe_type_display", "Smithing");
+        syntheticRecipe.addProperty("recipe_variant", "Netherite Upgrade (Synthetic)");
+
+        allRecipes.add(syntheticRecipe);
+    }
+
+    private boolean isTrimmableArmor(String itemName) {
+        return itemName.endsWith("_helmet") || itemName.endsWith("_chestplate") ||
+               itemName.endsWith("_leggings") || itemName.endsWith("_boots");
+    }
+
+    private void loadArmorTrimmingRecipes(String armorItem) {
+        // Common smithing templates for armor trimming
+        String[] trimmingTemplates = {
+            "coast_armor_trim_smithing_template",
+            "dune_armor_trim_smithing_template",
+            "eye_armor_trim_smithing_template",
+            "host_armor_trim_smithing_template",
+            "raiser_armor_trim_smithing_template",
+            "rib_armor_trim_smithing_template",
+            "sentry_armor_trim_smithing_template",
+            "shaper_armor_trim_smithing_template",
+            "silence_armor_trim_smithing_template",
+            "snout_armor_trim_smithing_template",
+            "spire_armor_trim_smithing_template",
+            "tide_armor_trim_smithing_template",
+            "vex_armor_trim_smithing_template",
+            "ward_armor_trim_smithing_template",
+            "wayfinder_armor_trim_smithing_template",
+            "wild_armor_trim_smithing_template"
+        };
+
+        // Common trim materials
+        String[] trimMaterials = {
+            "iron_ingot", "gold_ingot", "diamond", "emerald", "netherite_ingot",
+            "redstone", "lapis_lazuli", "amethyst_shard", "quartz", "copper_ingot"
+        };
+
+        // Create synthetic armor trimming recipes
+        for (String template : trimmingTemplates) {
+            for (String material : trimMaterials) {
+                JsonObject trimRecipe = new JsonObject();
+                trimRecipe.addProperty("type", "minecraft:smithing_transform");
+                trimRecipe.addProperty("template", "minecraft:" + template);
+                trimRecipe.addProperty("base", "minecraft:" + armorItem);
+                trimRecipe.addProperty("addition", "minecraft:" + material);
+
+                JsonObject result = new JsonObject();
+                result.addProperty("id", "minecraft:" + armorItem);
+                result.addProperty("count", 1);
+                trimRecipe.add("result", result);
+
+                trimRecipe.addProperty("recipe_type_display", "Smithing");
+                String trimName = template.replace("_armor_trim_smithing_template", "");
+                String materialName = material.replace("_", " ");
+                trimRecipe.addProperty("recipe_variant", "Trim: " +
+                    Character.toUpperCase(trimName.charAt(0)) + trimName.substring(1) +
+                    " (" + Character.toUpperCase(materialName.charAt(0)) + materialName.substring(1) + ")");
+
+                allRecipes.add(trimRecipe);
+            }
+        }
     }
 }

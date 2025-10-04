@@ -31,6 +31,7 @@ public class ItemListOverlay {
     private static TextFieldWidget searchField;
     private static String lastSearchText = "";
     private static boolean searchFieldInitialized = false;
+    private static boolean searchFieldFocused = false; // Track focus state separately
 
     public static void reloadItems() {
         ALL_ITEMS.clear();
@@ -200,19 +201,30 @@ public class ItemListOverlay {
     private static int totalPages = 1;
 
     public static void render(DrawContext context, int mouseX, int mouseY) {
-        // Always reinitialize to handle window scaling
-        searchFieldInitialized = false;
-        initializeSearchField();
-        clickableAreas.clear();
+        // Only initialize search field if not already initialized or if window scaling changed
         MinecraftClient client = MinecraftClient.getInstance();
-
+        int screenWidth = client.getWindow().getScaledWidth();
         RecipeViewerConfig config = RecipeViewerConfig.getInstance();
+        int overlayWidth = config.itemsPerRow * (ITEM_SIZE + PADDING) + 10;
+        int expectedX = screenWidth - overlayWidth - 10;
+
+        // Only recreate if position changed or not initialized
+        if (!searchFieldInitialized || searchField == null || searchField.getX() != expectedX) {
+            boolean wasFocused = searchFieldFocused; // Preserve focus state
+            initializeSearchField();
+            if (wasFocused) {
+                searchField.setFocused(true);
+                searchFieldFocused = true;
+            }
+        }
+
+        clickableAreas.clear();
+
         List<ItemStack> itemsToShow = FILTERED_ITEMS;
 
         int itemsPerPage = config.itemsPerRow * config.rowsPerPage;
         totalPages = Math.max(1, (itemsToShow.size() + itemsPerPage - 1) / itemsPerPage);
 
-        int screenWidth = client.getWindow().getScaledWidth();
         int startX = screenWidth - (config.itemsPerRow * (ITEM_SIZE + PADDING)) - 10;
         int startY = 25; // Leave more space for search field
 
@@ -315,8 +327,26 @@ public class ItemListOverlay {
 
     public static boolean handleClick(double mouseX, double mouseY) {
         // Handle search field clicks first
-        if (searchField != null && searchField.mouseClicked(mouseX, mouseY, 0)) {
-            return true;
+        if (searchField != null) {
+            int searchX = searchField.getX();
+            int searchY = searchField.getY();
+            int searchWidth = searchField.getWidth();
+            int searchHeight = searchField.getHeight();
+
+            // Check if click is within search field bounds
+            if (mouseX >= searchX && mouseX <= searchX + searchWidth &&
+                mouseY >= searchY && mouseY <= searchY + searchHeight) {
+
+                // Handle the click and set focus
+                searchField.mouseClicked(mouseX, mouseY, 0);
+                searchField.setFocused(true);
+                searchFieldFocused = true; // Track focus state
+                return true;
+            } else {
+                // Click outside search field - remove focus
+                searchField.setFocused(false);
+                searchFieldFocused = false; // Track focus state
+            }
         }
 
         RecipeViewerConfig config = RecipeViewerConfig.getInstance();
@@ -349,7 +379,8 @@ public class ItemListOverlay {
     }
 
     public static boolean handleKeyPress(int keyCode, int scanCode, int modifiers) {
-        if (searchField != null) {
+        // Only handle key presses if the search field is focused
+        if (searchField != null && searchField.isFocused()) {
             // Handle character input through keyPressed instead of charTyped
             boolean handled = searchField.keyPressed(keyCode, scanCode, modifiers);
 
@@ -396,9 +427,9 @@ public class ItemListOverlay {
                 return true;
             }
 
-            return false;
+            return true; // Consume all input when search field is focused
         }
-        return false;
+        return false; // Don't consume input when search field is not focused
     }
 
     public static boolean handleScroll(double amount) {
