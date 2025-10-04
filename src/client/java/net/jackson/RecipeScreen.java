@@ -32,6 +32,11 @@ public class RecipeScreen extends Screen {
     private int scrollOffset = 0;
     private int maxScroll = 0;
 
+    // Static variables to preserve search and scroll state
+    private static String preservedSearchText = "";
+    private static int preservedScrollOffset = 0;
+    private static boolean preservedCraftableFilter = false;
+
     private int ingredientCycleIndex = 0;
     private long lastCycleTime = 0;
     private static final long CYCLE_INTERVAL_MS = 1000; // 1 second per ingredient
@@ -124,11 +129,68 @@ public class RecipeScreen extends Screen {
             loadRecipeVariants(type, itemName, typeName);
         }
 
+        // Load crafting transmute recipes for shulkers and bundles
+        loadTransmuteRecipes(itemName);
+
         if (!allRecipes.isEmpty()) {
             recipe = allRecipes.get(0);
             currentRecipeIndex = 0;
         } else {
             recipe = null;
+        }
+    }
+
+    private void loadTransmuteRecipes(String itemName) {
+        // Check if this is a colored shulker box or bundle
+        if (itemName.endsWith("_shulker_box") || itemName.endsWith("_bundle")) {
+            // Try to load the crafting transmute recipe
+            Identifier file = Identifier.of("jackson", "recipes/" + itemName + ".json");
+            try (InputStreamReader reader = new InputStreamReader(
+                    Objects.requireNonNull(
+                            getClass().getClassLoader().getResourceAsStream("assets/" + file.getNamespace() + "/" + file.getPath()))
+            )) {
+                JsonObject recipeJson = JsonParser.parseReader(reader).getAsJsonObject();
+                String recipeType = recipeJson.get("type").getAsString();
+
+                if ("minecraft:crafting_transmute".equals(recipeType)) {
+                    recipeJson.addProperty("recipe_type_display", "Transmute");
+                    recipeJson.addProperty("recipe_variant", "Color Change");
+                    allRecipes.add(recipeJson);
+                }
+            } catch (Exception e) {
+                // No transmute recipe found, continue
+            }
+        }
+
+        // Also check for all color variants of this item type
+        if (itemName.contains("_shulker_box") || itemName.contains("_bundle")) {
+            String baseType = itemName.contains("_shulker_box") ? "_shulker_box" : "_bundle";
+            String[] colors = {
+                "white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray",
+                "light_gray", "cyan", "purple", "blue", "brown", "green", "red", "black"
+            };
+
+            for (String color : colors) {
+                String coloredVariant = color + baseType;
+                if (!coloredVariant.equals(itemName)) {
+                    Identifier file = Identifier.of("jackson", "recipes/" + coloredVariant + ".json");
+                    try (InputStreamReader reader = new InputStreamReader(
+                            Objects.requireNonNull(
+                                    getClass().getClassLoader().getResourceAsStream("assets/" + file.getNamespace() + "/" + file.getPath()))
+                    )) {
+                        JsonObject recipeJson = JsonParser.parseReader(reader).getAsJsonObject();
+                        String recipeType = recipeJson.get("type").getAsString();
+
+                        if ("minecraft:crafting_transmute".equals(recipeType)) {
+                            recipeJson.addProperty("recipe_type_display", "Transmute");
+                            recipeJson.addProperty("recipe_variant", "From " + color.replace("_", " "));
+                            allRecipes.add(recipeJson);
+                        }
+                    } catch (Exception e) {
+                        // No transmute recipe found for this color, continue
+                    }
+                }
+            }
         }
     }
 
@@ -293,6 +355,11 @@ public class RecipeScreen extends Screen {
             this.addDrawableChild(recipeTypeButton);
         }
 
+        // Restore preserved state
+        searchField.setText(preservedSearchText);
+        scrollOffset = preservedScrollOffset;
+        RecipeViewerConfig.getInstance().showOnlyCraftable = preservedCraftableFilter;
+
         updateMaxScroll();
     }
 
@@ -385,6 +452,9 @@ public class RecipeScreen extends Screen {
                 break;
             case "minecraft:crafting_shapeless":
                 renderShapelessCrafting(context, recipe, recipeX, recipeY);
+                break;
+            case "minecraft:crafting_transmute":
+                renderTransmuteCrafting(context, recipe, recipeX, recipeY);
                 break;
             case "minecraft:blasting":
             case "minecraft:smelting":
@@ -515,6 +585,39 @@ public class RecipeScreen extends Screen {
             context.drawText(this.textRenderer, countText, textX, textY, 0xFFFFFF, true);
             context.getMatrices().pop();
         }
+    }
+
+    private void renderTransmuteCrafting(DrawContext context, JsonObject json, int startX, int startY) {
+        // For transmute recipes, we show the source item and the target item
+        JsonObject result = json.getAsJsonObject("result");
+        int count = result.has("count") ? result.get("count").getAsInt() : 1;
+        ItemStack resultStack = new ItemStack(resolveItemFromIdOrTag(result.get("id").getAsString()), count);
+
+        // Draw the result item (target)
+        context.drawItem(resultStack, startX + 101, startY + 21);
+
+        // Draw count text manually if more than 1 (render in front)
+        if (count > 1) {
+            String countText = String.valueOf(count);
+            int textX = startX + 101 + 16 - this.textRenderer.getWidth(countText);
+            int textY = startY + 21 + 16 - this.textRenderer.fontHeight;
+            // Draw with shadow and higher z-level to ensure it's in front
+            context.drawText(this.textRenderer, countText, textX, textY, 0xFFFFFF, true);
+        }
+
+        // For transmute, the ingredient is the item itself (self-replicating)
+        String ingredientId = Registries.ITEM.getId(targetItem).getPath();
+        Item ingredientItem = resolveItemFromIdOrTag(ingredientId);
+        context.drawItem(new ItemStack(ingredientItem), startX + 1, startY + 1);
+
+        // Draw arrow indicating transformation
+        context.drawTexture(RenderLayer::getGuiTextured,
+                          Identifier.of("minecraft", "textures/gui/container/crafting_table.png"),
+                          startX + 70, startY + 20, 89.0f, 15.0f, 22, 15, 256, 256);
+
+        // Draw labels
+        context.drawTextWithShadow(this.textRenderer, Text.literal("Transmute"), startX, startY + 25, 0xAAAAA);
+        context.drawTextWithShadow(this.textRenderer, Text.literal("Result"), startX + 100, startY + 25, 0xAAAAA);
     }
 
     private void renderCooking(DrawContext context, JsonObject json, String type, int startX, int startY) {
@@ -740,6 +843,11 @@ public class RecipeScreen extends Screen {
                 if (index >= 0 && index < filteredItems.size()) {
                     Item clickedItem = filteredItems.get(index);
                     if (client != null) {
+                        // Preserve current state before switching to new item
+                        preservedSearchText = searchField.getText();
+                        preservedScrollOffset = scrollOffset;
+                        preservedCraftableFilter = RecipeViewerConfig.getInstance().showOnlyCraftable;
+
                         client.setScreen(new RecipeScreen(clickedItem));
                     }
                     return true;
