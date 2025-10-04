@@ -155,22 +155,44 @@ public class ItemListOverlay {
     }
 
     private static void initializeSearchField() {
-        if (!searchFieldInitialized || searchField == null) {
-            MinecraftClient client = MinecraftClient.getInstance();
-            int screenWidth = client.getWindow().getScaledWidth();
-            RecipeViewerConfig config = RecipeViewerConfig.getInstance();
-            int overlayWidth = config.itemsPerRow * (ITEM_SIZE + PADDING) + 10;
-            int startX = screenWidth - overlayWidth - 10;
+        MinecraftClient client = MinecraftClient.getInstance();
+        int screenWidth = client.getWindow().getScaledWidth();
+        RecipeViewerConfig config = RecipeViewerConfig.getInstance();
+        int overlayWidth = config.itemsPerRow * (ITEM_SIZE + PADDING) + 10;
+        int startX = screenWidth - overlayWidth - 10;
 
-            searchField = new TextFieldWidget(client.textRenderer, startX, 5, overlayWidth - 5, 12, Text.literal("Search..."));
-            searchField.setPlaceholder(Text.literal("Search items..."));
-            searchField.setText(lastSearchText);
-            searchField.setChangedListener(text -> {
-                lastSearchText = text;
-                updateFilteredItems();
-            });
-            searchFieldInitialized = true;
-        }
+        // Always recreate the search field to handle window scaling
+        searchField = new TextFieldWidget(client.textRenderer, startX, 5, overlayWidth - 5, 16, Text.literal("Search..."));
+        searchField.setPlaceholder(Text.literal("Search items..."));
+        searchField.setText(lastSearchText);
+        searchField.setChangedListener(text -> {
+            lastSearchText = text;
+            // Debounce the filtering to improve performance
+            scheduleFilterUpdate();
+        });
+        searchField.setFocusUnlocked(true);
+        searchField.setEditable(true);
+        searchFieldInitialized = true;
+    }
+
+    // Add debouncing for better performance
+    private static long lastFilterUpdateTime = 0;
+    private static final long FILTER_DEBOUNCE_MS = 150; // 150ms debounce
+
+    private static void scheduleFilterUpdate() {
+        lastFilterUpdateTime = System.currentTimeMillis();
+        // Use a separate thread to avoid blocking the main thread
+        new Thread(() -> {
+            try {
+                Thread.sleep(FILTER_DEBOUNCE_MS);
+                // Only update if no new input came in during the delay
+                if (System.currentTimeMillis() - lastFilterUpdateTime >= FILTER_DEBOUNCE_MS) {
+                    MinecraftClient.getInstance().execute(() -> updateFilteredItems());
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }).start();
     }
 
     private static final Map<Rect2i, Item> clickableAreas = new HashMap<>();
@@ -178,6 +200,8 @@ public class ItemListOverlay {
     private static int totalPages = 1;
 
     public static void render(DrawContext context, int mouseX, int mouseY) {
+        // Always reinitialize to handle window scaling
+        searchFieldInitialized = false;
         initializeSearchField();
         clickableAreas.clear();
         MinecraftClient client = MinecraftClient.getInstance();
@@ -190,16 +214,38 @@ public class ItemListOverlay {
 
         int screenWidth = client.getWindow().getScaledWidth();
         int startX = screenWidth - (config.itemsPerRow * (ITEM_SIZE + PADDING)) - 10;
-        int startY = 22; // Leave space for search field
+        int startY = 25; // Leave more space for search field
 
         // Draw semi-transparent background
         int bgWidth = config.itemsPerRow * (ITEM_SIZE + PADDING) + 10;
         int bgHeight = config.rowsPerPage * (ITEM_SIZE + PADDING) + 45; // Extra space for search and buttons
         context.fill(startX - 5, 2, startX + bgWidth, startY + bgHeight, 0x88000000);
 
-        // Render search field
+        // Draw search field background for better visibility
         if (searchField != null) {
+            int searchX = searchField.getX();
+            int searchY = searchField.getY();
+            int searchWidth = searchField.getWidth();
+            int searchHeight = searchField.getHeight();
+
+            // Draw search field border and background
+            boolean searchHovered = mouseX >= searchX && mouseX <= searchX + searchWidth &&
+                                  mouseY >= searchY && mouseY <= searchY + searchHeight;
+            boolean searchFocused = searchField.isFocused();
+
+            // Background
+            context.fill(searchX - 1, searchY - 1, searchX + searchWidth + 1, searchY + searchHeight + 1,
+                        searchFocused ? 0xFFFFFFFF : (searchHovered ? 0xFFCCCCCC : 0xFF999999));
+            context.fill(searchX, searchY, searchX + searchWidth, searchY + searchHeight, 0xFF000000);
+
+            // Render the actual search field
             searchField.render(context, mouseX, mouseY, 0);
+
+            // Add visual indicator when focused
+            if (searchFocused) {
+                // Draw a subtle glow effect
+                context.fill(searchX - 2, searchY - 2, searchX + searchWidth + 2, searchY + searchHeight + 2, 0x3300AAFF);
+            }
         }
 
         int indexStart = currentPage * itemsPerPage;
@@ -275,10 +321,10 @@ public class ItemListOverlay {
 
         RecipeViewerConfig config = RecipeViewerConfig.getInstance();
 
-        // Check toggle button click
+        // Check toggle button click - match the new positioning
         int screenWidth = MinecraftClient.getInstance().getWindow().getScaledWidth();
         int buttonStartX = screenWidth - (config.itemsPerRow * (ITEM_SIZE + PADDING)) - 10;
-        int toggleY = 22 + config.rowsPerPage * (ITEM_SIZE + PADDING) + 5;
+        int toggleY = 25 + config.rowsPerPage * (ITEM_SIZE + PADDING) + 5; // Updated to match new startY
         String toggleText = config.showOnlyCraftable ? "Show All" : "Craftables Only";
         int toggleWidth = MinecraftClient.getInstance().textRenderer.getWidth(toggleText) + 8;
 
@@ -307,8 +353,25 @@ public class ItemListOverlay {
             // Handle character input through keyPressed instead of charTyped
             boolean handled = searchField.keyPressed(keyCode, scanCode, modifiers);
 
+            // If the search field handled it (like backspace, delete, arrow keys), we're done
+            if (handled) {
+                return true;
+            }
+
+            // Handle special keys that might not be handled by the text field
+            if (keyCode == 259) { // GLFW_KEY_BACKSPACE
+                String currentText = searchField.getText();
+                if (!currentText.isEmpty()) {
+                    searchField.setText(currentText.substring(0, currentText.length() - 1));
+                    return true;
+                }
+            } else if (keyCode == 261) { // GLFW_KEY_DELETE
+                // Delete key - for now just clear selection or do nothing
+                return true;
+            }
+
             // For printable characters, we need to handle them as text input
-            if (!handled && keyCode >= 32 && keyCode <= 126) {
+            if (keyCode >= 32 && keyCode <= 126) {
                 char character = (char) keyCode;
                 // Handle shift modifier for uppercase
                 if ((modifiers & 1) != 0) { // SHIFT modifier
@@ -330,10 +393,10 @@ public class ItemListOverlay {
                 String currentText = searchField.getText();
                 String newText = currentText + character;
                 searchField.setText(newText);
-                handled = true;
+                return true;
             }
 
-            return handled;
+            return false;
         }
         return false;
     }

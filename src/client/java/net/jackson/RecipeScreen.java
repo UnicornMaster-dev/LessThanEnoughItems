@@ -109,25 +109,19 @@ public class RecipeScreen extends Screen {
         allRecipes.clear();
         String itemName = Registries.ITEM.getId(targetItem).getPath();
 
-        // Try to load different recipe types
+        // Try to load different recipe types and variants
         String[] recipeTypes = {"recipes", "smelting", "blasting", "smoking", "campfire_cooking"};
         String[] recipeTypeNames = {"Crafting", "Smelting", "Blasting", "Smoking", "Campfire"};
 
         for (int i = 0; i < recipeTypes.length; i++) {
             String type = recipeTypes[i];
-            Identifier file = Identifier.of("jackson", type + "/" + itemName + ".json");
+            String typeName = recipeTypeNames[i];
 
-            try (InputStreamReader reader = new InputStreamReader(
-                    Objects.requireNonNull(
-                            getClass().getClassLoader().getResourceAsStream("assets/" + file.getNamespace() + "/" + file.getPath()))
-            )) {
-                JsonObject recipeJson = JsonParser.parseReader(reader).getAsJsonObject();
-                // Add metadata about recipe type for display
-                recipeJson.addProperty("recipe_type_display", recipeTypeNames[i]);
-                allRecipes.add(recipeJson);
-            } catch (Exception e) {
-                // Recipe doesn't exist for this type, continue
-            }
+            // Load standard recipe
+            loadRecipeVariant(type, itemName, typeName);
+
+            // Load recipe variants (like iron_ingot_from_blasting_deepslate_iron_ore)
+            loadRecipeVariants(type, itemName, typeName);
         }
 
         if (!allRecipes.isEmpty()) {
@@ -136,6 +130,126 @@ public class RecipeScreen extends Screen {
         } else {
             recipe = null;
         }
+    }
+
+    private void loadRecipeVariant(String recipeType, String itemName, String typeName) {
+        Identifier file = Identifier.of("jackson", recipeType + "/" + itemName + ".json");
+        try (InputStreamReader reader = new InputStreamReader(
+                Objects.requireNonNull(
+                        getClass().getClassLoader().getResourceAsStream("assets/" + file.getNamespace() + "/" + file.getPath()))
+        )) {
+            JsonObject recipeJson = JsonParser.parseReader(reader).getAsJsonObject();
+            recipeJson.addProperty("recipe_type_display", typeName);
+            recipeJson.addProperty("recipe_variant", "Standard");
+            allRecipes.add(recipeJson);
+        } catch (Exception e) {
+            // Recipe doesn't exist for this type, continue
+        }
+    }
+
+    private void loadRecipeVariants(String recipeType, String itemName, String typeName) {
+        // Common recipe variant patterns
+        String[] variantPrefixes = {
+            itemName + "_from_",
+            itemName + "_from_blasting_",
+            itemName + "_from_smelting_",
+            itemName + "_from_smoking_",
+            itemName + "_from_campfire_cooking_"
+        };
+
+        String[] variantSuffixes = {
+            "_ore", "_raw_ore", "_deepslate_ore", "_nether_ore", "_block", "_ingot", "_nugget",
+            "_raw", "_scrap", "_dust", "_gem", "_crystal", "_shard", "_fragment"
+        };
+
+        // Try different combinations
+        for (String prefix : variantPrefixes) {
+            for (String suffix : variantSuffixes) {
+                String variantName = prefix + itemName.replace("_ingot", "").replace("_block", "") + suffix;
+                loadRecipeVariantByName(recipeType, variantName, typeName, extractVariantDisplayName(variantName));
+
+                // Also try without the base item name in the suffix
+                if (!suffix.equals("_ore")) {
+                    String alternateVariant = prefix + suffix.substring(1); // Remove the underscore
+                    loadRecipeVariantByName(recipeType, alternateVariant, typeName, extractVariantDisplayName(alternateVariant));
+                }
+            }
+        }
+
+        // Try specific known patterns for common items
+        loadKnownVariants(recipeType, itemName, typeName);
+    }
+
+    private void loadRecipeVariantByName(String recipeType, String variantName, String typeName, String variantDisplayName) {
+        Identifier file = Identifier.of("jackson", recipeType + "/" + variantName + ".json");
+        try (InputStreamReader reader = new InputStreamReader(
+                Objects.requireNonNull(
+                        getClass().getClassLoader().getResourceAsStream("assets/" + file.getNamespace() + "/" + file.getPath()))
+        )) {
+            JsonObject recipeJson = JsonParser.parseReader(reader).getAsJsonObject();
+            recipeJson.addProperty("recipe_type_display", typeName);
+            recipeJson.addProperty("recipe_variant", variantDisplayName);
+            allRecipes.add(recipeJson);
+        } catch (Exception e) {
+            // Variant doesn't exist, continue
+        }
+    }
+
+    private void loadKnownVariants(String recipeType, String itemName, String typeName) {
+        // Specific known variants for common items
+        Map<String, String[]> knownVariants = new HashMap<>();
+        knownVariants.put("iron_ingot", new String[]{
+            "iron_ingot_from_blasting_deepslate_iron_ore",
+            "iron_ingot_from_blasting_iron_ore",
+            "iron_ingot_from_blasting_raw_iron",
+            "iron_ingot_from_smelting_deepslate_iron_ore",
+            "iron_ingot_from_smelting_iron_ore",
+            "iron_ingot_from_smelting_raw_iron"
+        });
+        knownVariants.put("gold_ingot", new String[]{
+            "gold_ingot_from_blasting_deepslate_gold_ore",
+            "gold_ingot_from_blasting_gold_ore",
+            "gold_ingot_from_blasting_nether_gold_ore",
+            "gold_ingot_from_blasting_raw_gold",
+            "gold_ingot_from_smelting_deepslate_gold_ore",
+            "gold_ingot_from_smelting_gold_ore",
+            "gold_ingot_from_smelting_nether_gold_ore",
+            "gold_ingot_from_smelting_raw_gold"
+        });
+        knownVariants.put("copper_ingot", new String[]{
+            "copper_ingot_from_blasting_copper_ore",
+            "copper_ingot_from_blasting_deepslate_copper_ore",
+            "copper_ingot_from_blasting_raw_copper",
+            "copper_ingot_from_smelting_copper_ore",
+            "copper_ingot_from_smelting_deepslate_copper_ore",
+            "copper_ingot_from_smelting_raw_copper"
+        });
+
+        String[] variants = knownVariants.get(itemName);
+        if (variants != null) {
+            for (String variant : variants) {
+                String displayName = extractVariantDisplayName(variant);
+                loadRecipeVariantByName(recipeType, variant, typeName, displayName);
+            }
+        }
+    }
+
+    private String extractVariantDisplayName(String variantName) {
+        // Extract a readable display name from the variant
+        String display = variantName;
+
+        // Remove common prefixes
+        display = display.replaceFirst(".*_from_", "From ");
+
+        // Capitalize words and replace underscores
+        String[] words = display.split("_");
+        StringBuilder result = new StringBuilder();
+        for (String word : words) {
+            if (result.length() > 0) result.append(" ");
+            result.append(Character.toUpperCase(word.charAt(0))).append(word.substring(1));
+        }
+
+        return result.toString();
     }
 
     @Override
