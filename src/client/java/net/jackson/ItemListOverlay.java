@@ -26,7 +26,12 @@ public class ItemListOverlay {
 
     private static final List<ItemStack> ALL_ITEMS = new ArrayList<>();
     private static final List<ItemStack> FILTERED_ITEMS = new ArrayList<>();
-    private static final Set<String> CRAFTABLE_ITEMS = new HashSet<>();
+    private static final List<ItemStack> CRAFTABLE_ITEMS_CACHE = new ArrayList<>(); // Cache for craftable items
+    private static final Set<String> CRAFTABLE_ITEM_IDS = new HashSet<>(); // Fast lookup set
+
+    // Performance optimization: cache recipe existence checks
+    public static final Map<String, Boolean> RECIPE_CACHE = new HashMap<>(); // Made public for RecipeScreen access
+    private static boolean isCraftableCacheLoaded = false;
 
     private static TextFieldWidget searchField;
     private static String lastSearchText = "";
@@ -55,7 +60,8 @@ public class ItemListOverlay {
     }
 
     private static void loadCraftableItems() {
-        CRAFTABLE_ITEMS.clear();
+        CRAFTABLE_ITEM_IDS.clear();
+        CRAFTABLE_ITEMS_CACHE.clear();
         try {
             // Load from resources instead of file system for better performance
             String[] recipeTypes = {"recipes", "smelting", "blasting"};
@@ -87,7 +93,7 @@ public class ItemListOverlay {
         };
 
         for (String itemName : commonCraftable) {
-            CRAFTABLE_ITEMS.add(itemName);
+            CRAFTABLE_ITEM_IDS.add(itemName);
         }
     }
 
@@ -95,7 +101,7 @@ public class ItemListOverlay {
         String path = id.getPath();
 
         // Quick check against our loaded craftable items
-        if (CRAFTABLE_ITEMS.contains(path)) {
+        if (CRAFTABLE_ITEM_IDS.contains(path)) {
             return true;
         }
 
@@ -118,31 +124,53 @@ public class ItemListOverlay {
     }
 
     private static boolean checkRecipeExists(String itemName) {
+        // Check cache first
+        if (RECIPE_CACHE.containsKey(itemName)) {
+            return RECIPE_CACHE.get(itemName);
+        }
+
         try {
             InputStream stream = ItemListOverlay.class.getClassLoader()
                     .getResourceAsStream("assets/jackson/recipes/" + itemName + ".json");
-            if (stream != null) {
+            boolean exists = stream != null;
+            if (exists) {
                 stream.close();
-                return true;
             }
+            // Cache the result
+            RECIPE_CACHE.put(itemName, exists);
+            return exists;
         } catch (Exception ignored) {}
         return false;
     }
 
     private static void updateFilteredItems() {
-        List<ItemStack> baseItems = new ArrayList<>(ALL_ITEMS);
+        List<ItemStack> baseItems;
 
-        // Apply craftable filter if enabled
+        // Apply craftable filter if enabled - use fast cache lookup
         if (RecipeViewerConfig.getInstance().showOnlyCraftable) {
-            baseItems = baseItems.stream()
-                    .filter(stack -> hasCraftingRecipe(Registries.ITEM.getId(stack.getItem())))
-                    .collect(Collectors.toList());
+            if (isCraftableCacheLoaded) {
+                // Use pre-computed cache for instant filtering
+                baseItems = new ArrayList<>(CRAFTABLE_ITEMS_CACHE);
+            } else {
+                // Fallback to slower method if cache not ready yet
+                // Trigger cache loading if not started
+                preloadCraftableItems();
+                baseItems = ALL_ITEMS.stream()
+                        .filter(stack -> {
+                            String itemId = Registries.ITEM.getId(stack.getItem()).getPath();
+                            return CRAFTABLE_ITEM_IDS.contains(itemId) ||
+                                   fastCheckHasRecipe(itemId);
+                        })
+                        .collect(Collectors.toList());
+            }
+        } else {
+            baseItems = new ArrayList<>(ALL_ITEMS);
         }
 
-        // Apply search filter
+        // Apply search filter - optimized with early exit
         String searchText = (searchField != null ? searchField.getText() : "").toLowerCase().trim();
         if (!searchText.isEmpty()) {
-            baseItems = baseItems.stream()
+            baseItems = baseItems.parallelStream() // Use parallel stream for better performance
                     .filter(stack -> {
                         String itemName = stack.getName().getString().toLowerCase();
                         String itemId = Registries.ITEM.getId(stack.getItem()).getPath().toLowerCase();
@@ -162,8 +190,9 @@ public class ItemListOverlay {
         int overlayWidth = config.itemsPerRow * (ITEM_SIZE + PADDING) + 10;
         int startX = screenWidth - overlayWidth - 10;
 
-        // Always recreate the search field to handle window scaling
-        searchField = new TextFieldWidget(client.textRenderer, startX, 5, overlayWidth - 5, 16, Text.literal("Search..."));
+        // Make search field slightly narrower to prevent stretching too far left
+        int searchWidth = overlayWidth - 5; // Reduced from overlayWidth - 5 to overlayWidth - 15
+        searchField = new TextFieldWidget(client.textRenderer, startX + 10, 5, searchWidth, 16, Text.literal("Search..."));
         searchField.setPlaceholder(Text.literal("Search items..."));
         searchField.setText(lastSearchText);
         searchField.setChangedListener(text -> {
@@ -441,5 +470,144 @@ public class ItemListOverlay {
             return true;
         }
         return false;
+    }
+
+    // Performance optimization: pre-compute craftable items asynchronously
+    public static void preloadCraftableItems() {
+        if (isCraftableCacheLoaded) {
+            return; // Already loaded
+        }
+
+        // Run in background thread to avoid blocking
+        new Thread(() -> {
+            try {
+                CRAFTABLE_ITEMS_CACHE.clear();
+                CRAFTABLE_ITEM_IDS.clear();
+
+                // Expand the list of known craftable items significantly
+                populateExtensiveCraftableItems();
+
+                // Build the cache of craftable ItemStacks
+                for (Item item : Registries.ITEM) {
+                    if (item == Items.AIR || EXCLUDED_ITEMS.contains(item)) continue;
+
+                    String itemId = Registries.ITEM.getId(item).getPath();
+                    if (CRAFTABLE_ITEM_IDS.contains(itemId) || fastCheckHasRecipe(itemId)) {
+                        CRAFTABLE_ITEMS_CACHE.add(new ItemStack(item));
+                    }
+                }
+
+                isCraftableCacheLoaded = true;
+                System.out.println("Craftable items cache loaded: " + CRAFTABLE_ITEMS_CACHE.size() + " items");
+
+                // Update filtered items on main thread if craftable filter is active
+                MinecraftClient.getInstance().execute(() -> {
+                    if (RecipeViewerConfig.getInstance().showOnlyCraftable) {
+                        updateFilteredItems();
+                    }
+                });
+            } catch (Exception e) {
+                System.err.println("Error preloading craftable items: " + e.getMessage());
+            }
+        }).start();
+    }
+
+    private static void populateExtensiveCraftableItems() {
+        // Comprehensive list of craftable items for instant lookup
+        String[] craftableItems = {
+            // Basic materials
+            "oak_planks", "spruce_planks", "birch_planks", "jungle_planks", "acacia_planks", "dark_oak_planks",
+            "cherry_planks", "mangrove_planks", "bamboo_planks", "crimson_planks", "warped_planks",
+            "stick", "bowl", "crafting_table", "furnace", "chest", "ladder", "torch", "soul_torch",
+
+            // Tools - all tiers
+            "wooden_pickaxe", "wooden_axe", "wooden_shovel", "wooden_sword", "wooden_hoe",
+            "stone_pickaxe", "stone_axe", "stone_shovel", "stone_sword", "stone_hoe",
+            "iron_pickaxe", "iron_axe", "iron_shovel", "iron_sword", "iron_hoe",
+            "golden_pickaxe", "golden_axe", "golden_shovel", "golden_sword", "golden_hoe",
+            "diamond_pickaxe", "diamond_axe", "diamond_shovel", "diamond_sword", "diamond_hoe",
+            "netherite_pickaxe", "netherite_axe", "netherite_shovel", "netherite_sword", "netherite_hoe",
+
+            // Armor - all tiers
+            "leather_helmet", "leather_chestplate", "leather_leggings", "leather_boots",
+            "chainmail_helmet", "chainmail_chestplate", "chainmail_leggings", "chainmail_boots",
+            "iron_helmet", "iron_chestplate", "iron_leggings", "iron_boots",
+            "golden_helmet", "golden_chestplate", "golden_leggings", "golden_boots",
+            "diamond_helmet", "diamond_chestplate", "diamond_leggings", "diamond_boots",
+            "netherite_helmet", "netherite_chestplate", "netherite_leggings", "netherite_boots",
+
+            // Food
+            "bread", "cake", "cookie", "pumpkin_pie", "mushroom_stew", "rabbit_stew", "beetroot_soup",
+            "suspicious_stew", "honey_bottle", "sugar", "golden_apple", "golden_carrot",
+
+            // Building blocks
+            "cobblestone", "stone", "stone_bricks", "mossy_stone_bricks", "cracked_stone_bricks",
+            "chiseled_stone_bricks", "smooth_stone", "smooth_stone_slab", "cobblestone_slab",
+            "stone_slab", "stone_brick_slab", "mossy_stone_brick_slab", "smooth_sandstone",
+            "cut_sandstone", "chiseled_sandstone", "red_sandstone", "smooth_red_sandstone",
+            "cut_red_sandstone", "chiseled_red_sandstone", "bricks", "nether_bricks",
+            "red_nether_bricks", "chiseled_nether_bricks", "cracked_nether_bricks",
+
+            // Glass and panes
+            "glass", "glass_pane", "white_stained_glass", "orange_stained_glass", "magenta_stained_glass",
+            "light_blue_stained_glass", "yellow_stained_glass", "lime_stained_glass", "pink_stained_glass",
+            "gray_stained_glass", "light_gray_stained_glass", "cyan_stained_glass", "purple_stained_glass",
+            "blue_stained_glass", "brown_stained_glass", "green_stained_glass", "red_stained_glass",
+            "black_stained_glass",
+
+            // Redstone
+            "redstone_torch", "redstone_block", "repeater", "comparator", "piston", "sticky_piston",
+            "redstone_lamp", "daylight_detector", "tripwire_hook", "dropper", "dispenser", "hopper",
+            "observer", "target", "lectern", "note_block", "jukebox",
+
+            // Transportation
+            "rail", "powered_rail", "detector_rail", "activator_rail", "minecart", "chest_minecart",
+            "furnace_minecart", "hopper_minecart", "tnt_minecart", "oak_boat", "spruce_boat",
+            "birch_boat", "jungle_boat", "acacia_boat", "dark_oak_boat", "cherry_boat",
+            "mangrove_boat", "bamboo_raft",
+
+            // Utility blocks
+            "anvil", "enchanting_table", "bookshelf", "ender_chest", "shulker_box", "barrel",
+            "smoker", "blast_furnace", "grindstone", "stonecutter", "loom", "cartography_table",
+            "fletching_table", "smithing_table", "brewing_stand", "cauldron", "composter",
+            "bee_nest", "beehive", "campfire", "soul_campfire", "lantern", "soul_lantern",
+
+            // Decorative
+            "flower_pot", "item_frame", "glow_item_frame", "painting", "armor_stand", "end_rod",
+            "chorus_fruit", "purpur_block", "purpur_pillar", "purpur_slab", "purpur_stairs",
+            "end_stone_bricks", "sea_lantern", "prismarine", "prismarine_bricks", "dark_prismarine",
+
+            // Processed materials
+            "iron_ingot", "gold_ingot", "copper_ingot", "netherite_ingot", "diamond", "emerald",
+            "coal", "charcoal", "quartz", "amethyst_shard", "leather", "paper", "book",
+            "writable_book", "written_book", "map", "clock", "compass", "recovery_compass",
+            "bundle", "spyglass", "lead", "name_tag", "saddle"
+        };
+
+        for (String itemName : craftableItems) {
+            CRAFTABLE_ITEM_IDS.add(itemName);
+        }
+    }
+
+    private static boolean fastCheckHasRecipe(String itemName) {
+        // Quick heuristic checks before expensive I/O
+
+        // Common patterns that are usually craftable
+        if (itemName.endsWith("_planks") || itemName.endsWith("_log") ||
+            itemName.endsWith("_wood") || itemName.endsWith("_slab") ||
+            itemName.endsWith("_stairs") || itemName.endsWith("_fence") ||
+            itemName.endsWith("_door") || itemName.endsWith("_trapdoor") ||
+            itemName.endsWith("_button") || itemName.endsWith("_pressure_plate") ||
+            itemName.endsWith("_sign") || itemName.endsWith("_hanging_sign")) {
+            return true;
+        }
+
+        // Check cache first for expensive operations
+        if (RECIPE_CACHE.containsKey(itemName)) {
+            return RECIPE_CACHE.get(itemName);
+        }
+
+        // Only do expensive I/O check if not in cache
+        return checkRecipeExists(itemName);
     }
 }

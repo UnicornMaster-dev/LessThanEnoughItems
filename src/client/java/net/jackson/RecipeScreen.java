@@ -96,16 +96,31 @@ public class RecipeScreen extends Screen {
     private boolean hasRecipe(Item item) {
         String itemName = Registries.ITEM.getId(item).getPath();
 
-        // Check for any recipe type
-        String[] recipeTypes = {"recipes", "smelting", "blasting", "smoking", "campfire_cooking"};
+        // Use the same optimized cache system as ItemListOverlay
+        // Check for any recipe type using cached lookups
+        String[] recipeTypes = {"recipes", "smelting", "blasting", "smoking", "campfire_cooking", "smithing"};
         for (String type : recipeTypes) {
+            String cacheKey = type + "/" + itemName;
+            if (ItemListOverlay.RECIPE_CACHE.containsKey(cacheKey)) {
+                if (ItemListOverlay.RECIPE_CACHE.get(cacheKey)) {
+                    return true;
+                }
+                continue;
+            }
+
+            // Only do expensive I/O if not in cache
             Identifier file = Identifier.of("jackson", type + "/" + itemName + ".json");
             try (InputStreamReader reader = new InputStreamReader(
                     Objects.requireNonNull(
                             getClass().getClassLoader().getResourceAsStream("assets/" + file.getNamespace() + "/" + file.getPath()))
             )) {
-                return true; // If we can load it, it has a recipe
-            } catch (Exception ignored) {}
+                // Cache the positive result
+                ItemListOverlay.RECIPE_CACHE.put(cacheKey, true);
+                return true;
+            } catch (Exception ignored) {
+                // Cache the negative result
+                ItemListOverlay.RECIPE_CACHE.put(cacheKey, false);
+            }
         }
         return false;
     }
@@ -551,11 +566,26 @@ public class RecipeScreen extends Screen {
         List<String> ingredientIds = new ArrayList<>();
         if (json.has("ingredients")) {
             JsonArray ingredients = json.getAsJsonArray("ingredients");
-            for (JsonElement el : ingredients) ingredientIds.add(el.getAsString());
+            for (JsonElement el : ingredients) {
+                if (el.isJsonArray()) {
+                    // Handle ingredient arrays (multiple options for one ingredient slot)
+                    JsonArray options = el.getAsJsonArray();
+                    if (options.size() > 0) {
+                        // Use the first option for display
+                        ingredientIds.add(options.get(0).getAsString());
+                    }
+                } else {
+                    ingredientIds.add(el.getAsString());
+                }
+            }
         } else if (json.has("ingredient")) {
             JsonElement ing = json.get("ingredient");
             if (ing.isJsonArray()) {
-                for (JsonElement el : ing.getAsJsonArray()) ingredientIds.add(el.getAsString());
+                JsonArray options = ing.getAsJsonArray();
+                if (options.size() > 0) {
+                    // Use the first option for display
+                    ingredientIds.add(options.get(0).getAsString());
+                }
             } else if (ing.isJsonPrimitive()) {
                 ingredientIds.add(ing.getAsString());
             }
